@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.idea/
+.vscode/
+*.log
+*.jks
+*.keystore
+*.p12
+*.key
+android/
+ios/
+.DS_Store
