@@ -22,12 +22,36 @@ class FileExplorerModule : Module() {
             "LOST.DIR", ".trash", ".Trash"
         )
 
-        private val ioExecutor = Executors.newSingleThreadExecutor()
+        private val ioExecutor = Executors.newFixedThreadPool(2)
     }
 
     private fun isAudioFile(file: File): Boolean {
         val ext = file.extension.lowercase()
         return ext in AUDIO_EXTENSIONS
+    }
+
+    private fun hasAudioQuick(dir: File): Boolean {
+        val children = dir.listFiles() ?: return false
+        for (child in children) {
+            if (child.name.startsWith(".")) continue
+            if (child.isFile && isAudioFile(child)) return true
+            if (child.isDirectory && child.name !in SKIP_DIRS) {
+                val sub = child.listFiles() ?: continue
+                for (subChild in sub) {
+                    if (!subChild.name.startsWith(".") && subChild.isFile && isAudioFile(subChild)) return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun countAudioDirect(dir: File): Int {
+        val children = dir.listFiles() ?: return 0
+        var count = 0
+        for (child in children) {
+            if (!child.name.startsWith(".") && child.isFile && isAudioFile(child)) count++
+        }
+        return count
     }
 
     private fun listDirectorySync(path: String): Map<String, Any> {
@@ -49,12 +73,11 @@ class FileExplorerModule : Module() {
 
             if (child.isDirectory) {
                 if (child.name in SKIP_DIRS) continue
-                val audioCount = countAudioFilesRecursive(child, 2)
-                if (audioCount > 0) {
+                if (hasAudioQuick(child)) {
                     folders.add(mapOf(
                         "name" to child.name,
                         "path" to child.absolutePath,
-                        "audioCount" to audioCount
+                        "audioCount" to countAudioDirect(child)
                     ))
                 }
             } else if (child.isFile && isAudioFile(child)) {
@@ -71,23 +94,6 @@ class FileExplorerModule : Module() {
         }
 
         return mapOf("folders" to folders, "files" to files)
-    }
-
-    private fun countAudioFilesRecursive(dir: File, maxDepth: Int): Int {
-        if (maxDepth <= 0 || !dir.exists() || !dir.isDirectory) return 0
-        val children = dir.listFiles() ?: return 0
-        var count = 0
-        for (child in children) {
-            if (child.name.startsWith(".")) continue
-            if (child.isFile && isAudioFile(child)) {
-                count++
-                if (count >= 999) return count
-            } else if (child.isDirectory && child.name !in SKIP_DIRS) {
-                count += countAudioFilesRecursive(child, maxDepth - 1)
-                if (count >= 999) return count
-            }
-        }
-        return count
     }
 
     private fun getAllAudioInDirectorySync(path: String): List<Map<String, Any>> {

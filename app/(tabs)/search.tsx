@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Typography, Spacing, Layout, BorderRadius } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAudioLibrary } from '@/hooks/useAudioLibrary';
-import { usePlayer } from '@/contexts/PlayerContext';
+import { usePlaybackMetadata, usePlaybackControls } from '@/contexts/PlayerContext';
 import { TrackItem } from '@/components/TrackItem';
 import type { Track } from '@/types/audio';
 
@@ -24,7 +24,8 @@ function seededShuffle<T>(array: T[], seed: number): T[] {
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const { tracks, searchTracks } = useAudioLibrary();
-  const { state, controls } = usePlayer();
+  const { currentTrack, isPlaying } = usePlaybackMetadata();
+  const controls = usePlaybackControls();
   const { theme } = useTheme();
   const c = theme.colors;
   const [query, setQuery] = useState('');
@@ -36,32 +37,43 @@ export default function SearchScreen() {
     debounceTimer.current = setTimeout(() => {
       setDebouncedQuery(query);
     }, 300);
-    return () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); };
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
   }, [query]);
 
-  const searchResults = useMemo(() => debouncedQuery.trim() ? searchTracks(debouncedQuery) : [], [debouncedQuery, searchTracks]);
+  const searchResults = useMemo(
+    () => (debouncedQuery.trim() ? searchTracks(debouncedQuery) : []),
+    [debouncedQuery, searchTracks],
+  );
   const suggestedTracks = useMemo(() => {
     if (tracks.length === 0) return [];
     return seededShuffle(tracks, seedRef.current).slice(0, 10);
   }, [tracks]);
 
-  const handleTrackPress = useCallback((track: Track) => {
-    controls.playTrack(track, debouncedQuery.trim() ? searchResults : suggestedTracks);
-    Keyboard.dismiss();
-  }, [controls, searchResults, suggestedTracks, debouncedQuery]);
+  const handleTrackPress = useCallback(
+    (track: Track) => {
+      controls.playTrack(track, debouncedQuery.trim() ? searchResults : suggestedTracks);
+      Keyboard.dismiss();
+    },
+    [controls, searchResults, suggestedTracks, debouncedQuery],
+  );
 
   const displayData = debouncedQuery.trim() ? searchResults : suggestedTracks;
   const showingResults = debouncedQuery.trim() && searchResults.length > 0;
   const showingNoResults = debouncedQuery.trim() && searchResults.length === 0;
 
-  const renderItem = useCallback(({ item }: { item: Track }) => (
-    <TrackItem
-      track={item}
-      isPlaying={state.isPlaying && state.currentTrack?.id === item.id}
-      isCurrent={state.currentTrack?.id === item.id}
-      onPress={handleTrackPress}
-    />
-  ), [state.isPlaying, state.currentTrack?.id, handleTrackPress]);
+  const renderItem = useCallback(
+    ({ item }: { item: Track }) => (
+      <TrackItem
+        track={item}
+        isPlaying={isPlaying && currentTrack?.id === item.id}
+        isCurrent={currentTrack?.id === item.id}
+        onPress={handleTrackPress}
+      />
+    ),
+    [isPlaying, currentTrack?.id, handleTrackPress],
+  );
 
   return (
     <ScreenWithPlayer>
@@ -70,14 +82,29 @@ export default function SearchScreen() {
           <Text style={[styles.title, { color: c.textPrimary }]}>Buscar</Text>
           <View style={[styles.searchContainer, { backgroundColor: c.backgroundHighlight }]}>
             <Ionicons name="search" size={20} color={c.textMuted} />
-            <TextInput style={[styles.searchInput, { color: c.textPrimary }]} placeholder="Canciones, artistas o álbumes" placeholderTextColor={c.textMuted} value={query} onChangeText={setQuery} autoCapitalize="none" autoCorrect={false} returnKeyType="search" />
-            {query.length > 0 && <TouchableOpacity onPress={() => setQuery('')}><Ionicons name="close-circle" size={20} color={c.textMuted} /></TouchableOpacity>}
+            <TextInput
+              style={[styles.searchInput, { color: c.textPrimary }]}
+              placeholder="Canciones, artistas o álbumes"
+              placeholderTextColor={c.textMuted}
+              value={query}
+              onChangeText={setQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {query.length > 0 && (
+              <TouchableOpacity onPress={() => setQuery('')}>
+                <Ionicons name="close-circle" size={20} color={c.textMuted} />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
         {(showingResults || !debouncedQuery.trim()) && displayData.length > 0 && (
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionTitle, { color: c.textPrimary }]}>
-              {showingResults ? `${searchResults.length} resultado${searchResults.length !== 1 ? 's' : ''}` : 'Sugerencias para ti'}
+              {showingResults
+                ? `${searchResults.length} resultado${searchResults.length !== 1 ? 's' : ''}`
+                : 'Sugerencias para ti'}
             </Text>
           </View>
         )}
@@ -91,7 +118,7 @@ export default function SearchScreen() {
         <FlatList
           data={displayData}
           renderItem={renderItem}
-          keyExtractor={(item) => item.id}
+          keyExtractor={item => item.id}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -105,12 +132,23 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { paddingHorizontal: Spacing.base, paddingTop: Spacing.lg, paddingBottom: Spacing.base },
   title: { fontSize: Typography.fontSize['3xl'], fontWeight: Typography.fontWeight.bold, marginBottom: Spacing.base },
-  searchContainer: { flexDirection: 'row', alignItems: 'center', borderRadius: BorderRadius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.md },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+  },
   searchInput: { flex: 1, fontSize: Typography.fontSize.md, marginLeft: Spacing.sm },
   sectionHeader: { paddingHorizontal: Spacing.base, paddingVertical: Spacing.md },
   sectionTitle: { fontSize: Typography.fontSize.lg, fontWeight: Typography.fontWeight.bold },
   noResults: { alignItems: 'center', justifyContent: 'center', paddingVertical: Spacing['3xl'] },
-  noResultsTitle: { fontSize: Typography.fontSize.xl, fontWeight: Typography.fontWeight.bold, marginTop: Spacing.lg, marginBottom: Spacing.sm },
+  noResultsTitle: {
+    fontSize: Typography.fontSize.xl,
+    fontWeight: Typography.fontWeight.bold,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
   noResultsText: { fontSize: Typography.fontSize.base, textAlign: 'center' },
   listContent: { paddingBottom: Layout.screenPaddingBottom },
 });

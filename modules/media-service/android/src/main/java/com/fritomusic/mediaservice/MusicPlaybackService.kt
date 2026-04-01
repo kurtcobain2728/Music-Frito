@@ -15,18 +15,23 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.LruCache
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media.session.MediaButtonReceiver
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 
 class MusicPlaybackService : Service() {
 
     companion object {
+        private const val TAG = "FritoMusicService"
         const val CHANNEL_ID = "frito_music_playback"
         const val NOTIFICATION_ID = 1337
 
@@ -44,6 +49,7 @@ class MusicPlaybackService : Service() {
     private lateinit var notificationManager: NotificationManager
     private val artworkCache = LruCache<String, Bitmap>(10)
     private val executor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var currentArtwork: Bitmap? = null
     private var currentTitle: String = ""
     private var currentArtist: String = ""
@@ -52,6 +58,9 @@ class MusicPlaybackService : Service() {
     private var currentPositionMs: Long = 0
     private var isPlaying: Boolean = false
     private var callback: MediaServiceCallback? = null
+    private var isForegroundStarted = false
+
+    private val pendingActions = ConcurrentLinkedQueue<String>()
 
     interface MediaServiceCallback {
         fun onPlay()
@@ -68,18 +77,49 @@ class MusicPlaybackService : Service() {
 
     private val binder = LocalBinder()
 
-    private val controlReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                ACTION_PLAY -> callback?.onPlay()
-                ACTION_PAUSE -> callback?.onPause()
-                ACTION_NEXT -> callback?.onNext()
-                ACTION_PREVIOUS -> callback?.onPrevious()
+    private fun dispatchAction(action: String) {
+        Log.d(TAG, "dispatchAction: $action, callback=${callback != null}")
+        val cb = callback
+        if (cb != null) {
+            when (action) {
+                ACTION_PLAY -> cb.onPlay()
+                ACTION_PAUSE -> cb.onPause()
+                ACTION_NEXT -> cb.onNext()
+                ACTION_PREVIOUS -> cb.onPrevious()
                 ACTION_STOP -> {
-                    callback?.onStop()
+                    cb.onStop()
                     stopSelf()
                 }
             }
+        } else {
+            pendingActions.add(action)
+            mainHandler.postDelayed({ drainPendingActions() }, 500)
+        }
+    }
+
+    fun drainPendingActions() {
+        val cb = callback ?: return
+        while (true) {
+            val action = pendingActions.poll() ?: break
+            Log.d(TAG, "draining pending action: $action")
+            when (action) {
+                ACTION_PLAY -> cb.onPlay()
+                ACTION_PAUSE -> cb.onPause()
+                ACTION_NEXT -> cb.onNext()
+                ACTION_PREVIOUS -> cb.onPrevious()
+                ACTION_STOP -> {
+                    cb.onStop()
+                    stopSelf()
+                }
+            }
+        }
+    }
+
+    private val controlReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            Log.d(TAG, "controlReceiver onReceive: $action")
+            dispatchAction(action)
         }
     }
 
@@ -89,6 +129,7 @@ class MusicPlaybackService : Service() {
         createNotificationChannel()
         initMediaSession()
         registerControlReceiver()
+        Log.d(TAG, "Service created")
     }
 
     private fun registerControlReceiver() {
@@ -100,7 +141,7 @@ class MusicPlaybackService : Service() {
             addAction(ACTION_STOP)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(controlReceiver, filter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(controlReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(controlReceiver, filter)
         }
@@ -129,15 +170,30 @@ class MusicPlaybackService : Service() {
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
             )
             setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() { callback?.onPlay() }
-                override fun onPause() { callback?.onPause() }
-                override fun onSkipToNext() { callback?.onNext() }
-                override fun onSkipToPrevious() { callback?.onPrevious() }
-                override fun onStop() {
-                    callback?.onStop()
-                    stopSelf()
+                override fun onPlay() {
+                    Log.d(TAG, "MediaSession onPlay")
+                    dispatchAction(ACTION_PLAY)
                 }
-                override fun onSeekTo(pos: Long) { callback?.onSeekTo(pos) }
+                override fun onPause() {
+                    Log.d(TAG, "MediaSession onPause")
+                    dispatchAction(ACTION_PAUSE)
+                }
+                override fun onSkipToNext() {
+                    Log.d(TAG, "MediaSession onSkipToNext")
+                    dispatchAction(ACTION_NEXT)
+                }
+                override fun onSkipToPrevious() {
+                    Log.d(TAG, "MediaSession onSkipToPrevious")
+                    dispatchAction(ACTION_PREVIOUS)
+                }
+                override fun onStop() {
+                    Log.d(TAG, "MediaSession onStop")
+                    dispatchAction(ACTION_STOP)
+                }
+                override fun onSeekTo(pos: Long) {
+                    Log.d(TAG, "MediaSession onSeekTo: $pos")
+                    callback?.onSeekTo(pos)
+                }
             })
             isActive = true
         }
@@ -145,6 +201,9 @@ class MusicPlaybackService : Service() {
 
     fun setCallback(cb: MediaServiceCallback?) {
         callback = cb
+        if (cb != null) {
+            drainPendingActions()
+        }
     }
 
     fun getMediaSessionToken(): MediaSessionCompat.Token = mediaSession.sessionToken
@@ -183,8 +242,10 @@ class MusicPlaybackService : Service() {
                             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
                             .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
                             .build()
-                        mediaSession.setMetadata(updatedMeta)
-                        updateNotification()
+                        mainHandler.post {
+                            mediaSession.setMetadata(updatedMeta)
+                            updateNotification()
+                        }
                     }
                 }
             }
@@ -219,8 +280,12 @@ class MusicPlaybackService : Service() {
     private fun updateNotification() {
         try {
             val notification = buildNotification()
-            notificationManager.notify(NOTIFICATION_ID, notification)
-        } catch (_: Exception) {}
+            if (isForegroundStarted) {
+                notificationManager.notify(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "updateNotification failed", e)
+        }
     }
 
     private fun buildNotification(): Notification {
@@ -283,7 +348,7 @@ class MusicPlaybackService : Service() {
         val intent = Intent(action).setPackage(packageName)
         return PendingIntent.getBroadcast(
             this, action.hashCode(), intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
     }
 
@@ -317,6 +382,7 @@ class MusicPlaybackService : Service() {
     }
 
     fun startForegroundService() {
+        if (isForegroundStarted) return
         try {
             val notification = buildNotification()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -324,12 +390,19 @@ class MusicPlaybackService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-        } catch (_: Exception) {}
+            isForegroundStarted = true
+            Log.d(TAG, "Foreground started")
+        } catch (e: Exception) {
+            Log.e(TAG, "startForegroundService failed", e)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!isForegroundStarted) {
+            startForegroundService()
+        }
         MediaButtonReceiver.handleIntent(mediaSession, intent)
         return START_STICKY
     }
@@ -340,6 +413,7 @@ class MusicPlaybackService : Service() {
         mediaSession.isActive = false
         mediaSession.release()
         executor.shutdown()
+        isForegroundStarted = false
         super.onDestroy()
     }
 

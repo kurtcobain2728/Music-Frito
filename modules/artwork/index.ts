@@ -20,7 +20,10 @@ interface IArtworkModule {
   getArtwork(uri: string, maxSize: number): Promise<string | null>;
   getMetadata(uri: string): Promise<AudioMetadata>;
   getArtworkBatch(uris: string[], maxSize: number): Promise<ArtworkBatchResult[]>;
+  hasDiskCache(uri: string, maxSize: number): Promise<boolean>;
+  getDiskCachePath(uri: string, maxSize: number): Promise<string | null>;
   clearCache(): Promise<boolean>;
+  getDiskCacheSize(): Promise<number>;
 }
 
 let ArtworkModule: IArtworkModule | null = null;

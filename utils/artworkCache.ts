@@ -14,10 +14,11 @@ function evictOldest() {
 export async function getArtwork(uri: string, maxSize = 300): Promise<string | null> {
   if (!uri) return null;
 
-  const cached = memoryCache.get(uri);
+  const cacheKey = `${uri}:${maxSize}`;
+  const cached = memoryCache.get(cacheKey);
   if (cached) return cached;
 
-  const pending = pendingRequests.get(uri);
+  const pending = pendingRequests.get(cacheKey);
   if (pending) return pending;
 
   if (!ArtworkModule) return null;
@@ -27,17 +28,17 @@ export async function getArtwork(uri: string, maxSize = 300): Promise<string | n
       const result = await ArtworkModule.getArtwork(uri, maxSize);
       if (result) {
         evictOldest();
-        memoryCache.set(uri, result);
+        memoryCache.set(cacheKey, result);
       }
       return result;
     } catch (_e) {
       return null;
     } finally {
-      pendingRequests.delete(uri);
+      pendingRequests.delete(cacheKey);
     }
   })();
 
-  pendingRequests.set(uri, request);
+  pendingRequests.set(cacheKey, request);
   return request;
 }
 
@@ -51,7 +52,11 @@ export async function getMetadata(uri: string) {
 }
 
 export function getCachedArtwork(uri: string): string | null {
-  return memoryCache.get(uri) || null;
+  if (!uri) return null;
+  for (const [key, value] of memoryCache) {
+    if (key.startsWith(uri + ':')) return value;
+  }
+  return null;
 }
 
 export function clearArtworkCache() {

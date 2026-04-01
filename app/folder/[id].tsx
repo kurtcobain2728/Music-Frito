@@ -1,12 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  Image,
-} from 'react-native';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -14,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Typography, Spacing, Layout, BorderRadius, Shadows } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAudioLibrary } from '@/hooks/useAudioLibrary';
-import { usePlayer } from '@/contexts/PlayerContext';
+import { usePlaybackMetadata, usePlaybackControls } from '@/contexts/PlayerContext';
 import { TrackItem } from '@/components/TrackItem';
 import { ScreenWithPlayer } from '@/components/ScreenWithPlayer';
 import { formatTrackCount, formatLongDuration } from '@/utils/formatters';
@@ -24,7 +17,8 @@ export default function FolderDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id, name } = useLocalSearchParams<{ id: string; name: string }>();
   const { getTracksForFolder } = useAudioLibrary();
-  const { state, controls } = usePlayer();
+  const { currentTrack, isPlaying } = usePlaybackMetadata();
+  const controls = usePlaybackControls();
   const { theme } = useTheme();
   const c = theme.colors;
 
@@ -45,9 +39,12 @@ export default function FolderDetailScreen() {
     router.back();
   }, []);
 
-  const handleTrackPress = useCallback((track: Track) => {
-    controls.playTrack(track, folderTracks);
-  }, [controls, folderTracks]);
+  const handleTrackPress = useCallback(
+    (track: Track) => {
+      controls.playTrack(track, folderTracks);
+    },
+    [controls, folderTracks],
+  );
 
   const handlePlayAll = useCallback(() => {
     if (folderTracks.length > 0) {
@@ -62,16 +59,19 @@ export default function FolderDetailScreen() {
     }
   }, [controls, folderTracks]);
 
-  const renderTrackItem = useCallback(({ item, index }: { item: Track; index: number }) => (
-    <TrackItem
-      track={item}
-      index={index}
-      showIndex={true}
-      isPlaying={state.isPlaying && state.currentTrack?.id === item.id}
-      isCurrent={state.currentTrack?.id === item.id}
-      onPress={handleTrackPress}
-    />
-  ), [state.currentTrack, state.isPlaying, handleTrackPress]);
+  const renderTrackItem = useCallback(
+    ({ item, index }: { item: Track; index: number }) => (
+      <TrackItem
+        track={item}
+        index={index}
+        showIndex={true}
+        isPlaying={isPlaying && currentTrack?.id === item.id}
+        isCurrent={currentTrack?.id === item.id}
+        onPress={handleTrackPress}
+      />
+    ),
+    [currentTrack, isPlaying, handleTrackPress],
+  );
 
   const keyExtractor = useCallback((item: Track) => item.id, []);
 
@@ -79,16 +79,9 @@ export default function FolderDetailScreen() {
     <View style={styles.header}>
       <View style={[styles.artworkContainer, { ...Shadows.xl }]}>
         {folderArtwork ? (
-          <Image
-            source={{ uri: folderArtwork }}
-            style={styles.artwork}
-            resizeMode="cover"
-          />
+          <Image source={{ uri: folderArtwork }} style={styles.artwork} resizeMode="cover" />
         ) : (
-          <LinearGradient
-            colors={[c.backgroundHighlight, c.background]}
-            style={styles.artworkPlaceholder}
-          >
+          <LinearGradient colors={[c.backgroundHighlight, c.background]} style={styles.artworkPlaceholder}>
             <Ionicons name="folder-open" size={80} color={c.textMuted} />
           </LinearGradient>
         )}
@@ -120,15 +113,9 @@ export default function FolderDetailScreen() {
   return (
     <ScreenWithPlayer>
       <View style={[styles.container, { backgroundColor: c.background, paddingTop: insets.top }]}>
-        <LinearGradient
-          colors={[c.backgroundHighlight, c.background]}
-          style={styles.gradient}
-        />
+        <LinearGradient colors={[c.backgroundHighlight, c.background]} style={styles.gradient} />
 
-        <TouchableOpacity
-          style={[styles.backButton, { top: insets.top + Spacing.sm }]}
-          onPress={handleBack}
-        >
+        <TouchableOpacity style={[styles.backButton, { top: insets.top + Spacing.sm }]} onPress={handleBack}>
           <Ionicons name="chevron-back" size={28} color={c.textPrimary} />
         </TouchableOpacity>
 
@@ -136,12 +123,18 @@ export default function FolderDetailScreen() {
           data={folderTracks}
           renderItem={renderTrackItem}
           keyExtractor={keyExtractor}
+          getItemLayout={(_: any, index: number) => ({
+            length: Layout.trackItemHeight,
+            offset: Layout.trackItemHeight * index,
+            index,
+          })}
           ListHeaderComponent={renderHeader}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingBottom: Layout.screenPaddingBottom + 20 },
-          ]}
+          contentContainerStyle={[styles.listContent, { paddingBottom: Layout.screenPaddingBottom + 20 }]}
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          initialNumToRender={15}
         />
       </View>
     </ScreenWithPlayer>

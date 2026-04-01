@@ -3,7 +3,7 @@ import { ScreenWithPlayer } from '@/components/ScreenWithPlayer';
 import { TrackItem } from '@/components/TrackItem';
 import { BorderRadius, Layout, Shadows, Spacing, Typography } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
-import { usePlayer } from '@/contexts/PlayerContext';
+import { usePlaybackMetadata, usePlaybackControls } from '@/contexts/PlayerContext';
 import { useAudioLibrary } from '@/hooks/useAudioLibrary';
 import type { Track } from '@/types/audio';
 import { formatLongDuration, formatTrackCount } from '@/utils/formatters';
@@ -18,7 +18,8 @@ type SortOption = 'title' | 'artist' | 'album' | 'recent';
 export default function LibraryScreen() {
   const insets = useSafeAreaInsets();
   const { tracks, isScanning, scanLibrary } = useAudioLibrary();
-  const { state, controls } = usePlayer();
+  const { currentTrack, isPlaying } = usePlaybackMetadata();
+  const controls = usePlaybackControls();
   const { theme } = useTheme();
   const c = theme.colors;
   const [sortBy, setSortBy] = useState<SortOption>('title');
@@ -66,12 +67,12 @@ export default function LibraryScreen() {
         track={item}
         index={index}
         showHeart={true}
-        isPlaying={state.isPlaying && state.currentTrack?.id === item.id}
-        isCurrent={state.currentTrack?.id === item.id}
+        isPlaying={isPlaying && currentTrack?.id === item.id}
+        isCurrent={currentTrack?.id === item.id}
         onPress={handleTrackPress}
       />
     ),
-    [state.currentTrack, state.isPlaying, handleTrackPress],
+    [currentTrack, isPlaying, handleTrackPress],
   );
 
   const keyExtractor = useCallback((item: Track) => item.id, []);
@@ -169,9 +170,9 @@ export default function LibraryScreen() {
           contentContainerStyle={[styles.listContent, sortedTracks.length === 0 && styles.listContentEmpty]}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews={true}
-          maxToRenderPerBatch={20}
-          windowSize={15}
-          initialNumToRender={20}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          initialNumToRender={15}
           updateCellsBatchingPeriod={50}
           refreshControl={
             <RefreshControl

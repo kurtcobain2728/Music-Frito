@@ -1,6 +1,6 @@
 import { BorderRadius, Layout, Shadows, Spacing, Typography } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
-import { usePlayer } from '@/contexts/PlayerContext';
+import { usePlaybackPosition, usePlaybackMetadata, usePlaybackControls } from '@/contexts/PlayerContext';
 import { calculateProgress } from '@/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,10 +11,11 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-na
 import { OptimizedArtwork } from './OptimizedArtwork';
 
 function MiniPlayerComponent() {
-  const { state, controls } = usePlayer();
+  const { currentTrack, isPlaying } = usePlaybackMetadata();
+  const { position, duration } = usePlaybackPosition();
+  const controls = usePlaybackControls();
   const { theme } = useTheme();
   const c = theme.colors;
-  const { currentTrack, isPlaying, position, duration } = state;
 
   if (!currentTrack) return null;
 

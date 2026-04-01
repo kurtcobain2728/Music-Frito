@@ -8,34 +8,89 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.util.Log
 import androidx.palette.graphics.Palette
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class MediaServiceModule : Module() {
+
+    companion object {
+        private const val TAG = "FritoMediaModule"
+    }
 
     private var service: MusicPlaybackService? = null
     private var isBound = false
     private val executor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private data class PendingMetadata(
+        val title: String,
+        val artist: String,
+        val album: String,
+        val durationMs: Long,
+        val trackUri: String?
+    )
+    private var pendingMetadata: PendingMetadata? = null
+    private var pendingPlaybackState: Pair<Boolean, Long>? = null
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            Log.d(TAG, "onServiceConnected")
             val localBinder = binder as MusicPlaybackService.LocalBinder
             service = localBinder.getService()
             isBound = true
+
             service?.setCallback(object : MusicPlaybackService.MediaServiceCallback {
-                override fun onPlay() { sendEvent("onRemotePlay", emptyMap<String, Any>()) }
-                override fun onPause() { sendEvent("onRemotePause", emptyMap<String, Any>()) }
-                override fun onNext() { sendEvent("onRemoteNext", emptyMap<String, Any>()) }
-                override fun onPrevious() { sendEvent("onRemotePrevious", emptyMap<String, Any>()) }
-                override fun onSeekTo(positionMs: Long) { sendEvent("onRemoteSeek", mapOf("position" to positionMs)) }
-                override fun onStop() { sendEvent("onRemoteStop", emptyMap<String, Any>()) }
+                override fun onPlay() {
+                    Log.d(TAG, "callback onPlay -> sendEvent")
+                    sendEvent("onRemotePlay", emptyMap<String, Any>())
+                }
+                override fun onPause() {
+                    Log.d(TAG, "callback onPause -> sendEvent")
+                    sendEvent("onRemotePause", emptyMap<String, Any>())
+                }
+                override fun onNext() {
+                    Log.d(TAG, "callback onNext -> sendEvent")
+                    sendEvent("onRemoteNext", emptyMap<String, Any>())
+                }
+                override fun onPrevious() {
+                    Log.d(TAG, "callback onPrevious -> sendEvent")
+                    sendEvent("onRemotePrevious", emptyMap<String, Any>())
+                }
+                override fun onSeekTo(positionMs: Long) {
+                    Log.d(TAG, "callback onSeekTo -> sendEvent: $positionMs")
+                    sendEvent("onRemoteSeek", mapOf("position" to positionMs))
+                }
+                override fun onStop() {
+                    Log.d(TAG, "callback onStop -> sendEvent")
+                    sendEvent("onRemoteStop", emptyMap<String, Any>())
+                }
             })
+
+            pendingMetadata?.let { meta ->
+                Log.d(TAG, "applying pending metadata: ${meta.title}")
+                service?.updateMetadata(meta.title, meta.artist, meta.album, meta.durationMs, meta.trackUri)
+                service?.startForegroundService()
+                pendingMetadata = null
+            }
+            pendingPlaybackState?.let { (playing, pos) ->
+                Log.d(TAG, "applying pending playback state: playing=$playing")
+                service?.updatePlaybackState(playing, pos)
+                pendingPlaybackState = null
+            }
+
+            service?.drainPendingActions()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            Log.d(TAG, "onServiceDisconnected")
             service = null
             isBound = false
         }
@@ -58,6 +113,7 @@ class MediaServiceModule : Module() {
             val intent = Intent(context, MusicPlaybackService::class.java)
             context.startForegroundService(intent)
             context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            Log.d(TAG, "startService called")
             true
         }
 
@@ -74,13 +130,24 @@ class MediaServiceModule : Module() {
         }
 
         AsyncFunction("updateMetadata") { title: String, artist: String, album: String, durationMs: Double, trackUri: String? ->
-            service?.updateMetadata(title, artist, album, durationMs.toLong(), trackUri)
-            service?.startForegroundService()
+            val svc = service
+            if (svc != null) {
+                svc.updateMetadata(title, artist, album, durationMs.toLong(), trackUri)
+                svc.startForegroundService()
+            } else {
+                Log.d(TAG, "service null, queuing metadata")
+                pendingMetadata = PendingMetadata(title, artist, album, durationMs.toLong(), trackUri)
+            }
             true
         }
 
         AsyncFunction("updatePlaybackState") { playing: Boolean, positionMs: Double ->
-            service?.updatePlaybackState(playing, positionMs.toLong())
+            val svc = service
+            if (svc != null) {
+                svc.updatePlaybackState(playing, positionMs.toLong())
+            } else {
+                pendingPlaybackState = Pair(playing, positionMs.toLong())
+            }
             true
         }
 

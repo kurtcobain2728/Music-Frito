@@ -3,28 +3,21 @@ import { TrackItem } from '@/components/TrackItem';
 import { BorderRadius, Layout, Shadows, Spacing, Typography } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useFavorites } from '@/contexts/FavoritesContext';
-import { usePlayer } from '@/contexts/PlayerContext';
+import { usePlaybackMetadata, usePlaybackControls } from '@/contexts/PlayerContext';
 import type { Track } from '@/types/audio';
 import { formatLongDuration, formatTrackCount } from '@/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo } from 'react';
-import {
-    Alert,
-    FlatList,
-    Image,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
-} from 'react-native';
+import { Alert, FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function PlaylistDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id, name } = useLocalSearchParams<{ id: string; name: string }>();
-  const { state, controls } = usePlayer();
+  const { currentTrack, isPlaying } = usePlaybackMetadata();
+  const controls = usePlaybackControls();
   const { getPlaylist, removeFromPlaylist, deletePlaylist } = useFavorites();
   const { theme } = useTheme();
   const c = theme.colors;
@@ -44,9 +37,12 @@ export default function PlaylistDetailScreen() {
     router.back();
   }, []);
 
-  const handleTrackPress = useCallback((track: Track) => {
-    controls.playTrack(track, playlistTracks);
-  }, [controls, playlistTracks]);
+  const handleTrackPress = useCallback(
+    (track: Track) => {
+      controls.playTrack(track, playlistTracks);
+    },
+    [controls, playlistTracks],
+  );
 
   const handlePlayAll = useCallback(() => {
     if (playlistTracks.length > 0) {
@@ -62,35 +58,34 @@ export default function PlaylistDetailScreen() {
   }, [controls, playlistTracks]);
 
   const handleDeletePlaylist = useCallback(() => {
-    Alert.alert(
-      'Eliminar lista',
-      `¿Estás seguro de eliminar "${name}"?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Eliminar', 
-          style: 'destructive',
-          onPress: async () => {
-            if (id) {
-              await deletePlaylist(id);
-              router.back();
-            }
+    Alert.alert('Eliminar lista', `¿Estás seguro de eliminar "${name}"?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          if (id) {
+            await deletePlaylist(id);
+            router.back();
           }
         },
-      ]
-    );
+      },
+    ]);
   }, [id, name, deletePlaylist]);
 
-  const renderTrackItem = useCallback(({ item, index }: { item: Track; index: number }) => (
-    <TrackItem
-      track={item}
-      index={index}
-      showIndex={true}
-      isPlaying={state.isPlaying && state.currentTrack?.id === item.id}
-      isCurrent={state.currentTrack?.id === item.id}
-      onPress={handleTrackPress}
-    />
-  ), [state.currentTrack, state.isPlaying, handleTrackPress]);
+  const renderTrackItem = useCallback(
+    ({ item, index }: { item: Track; index: number }) => (
+      <TrackItem
+        track={item}
+        index={index}
+        showIndex={true}
+        isPlaying={isPlaying && currentTrack?.id === item.id}
+        isCurrent={currentTrack?.id === item.id}
+        onPress={handleTrackPress}
+      />
+    ),
+    [currentTrack, isPlaying, handleTrackPress],
+  );
 
   const keyExtractor = useCallback((item: Track) => item.id, []);
 
@@ -98,16 +93,9 @@ export default function PlaylistDetailScreen() {
     <View style={styles.header}>
       <View style={[styles.artworkContainer, { ...Shadows.xl }]}>
         {playlist?.artwork ? (
-          <Image 
-            source={{ uri: playlist.artwork }} 
-            style={styles.artwork}
-            resizeMode="cover"
-          />
+          <Image source={{ uri: playlist.artwork }} style={styles.artwork} resizeMode="cover" />
         ) : (
-          <LinearGradient
-            colors={[c.primary + '60', c.primary + '30']}
-            style={styles.artworkPlaceholder}
-          >
+          <LinearGradient colors={[c.primary + '60', c.primary + '30']} style={styles.artworkPlaceholder}>
             <Ionicons name="musical-notes" size={60} color={c.primary} />
           </LinearGradient>
         )}
@@ -119,21 +107,21 @@ export default function PlaylistDetailScreen() {
       </Text>
 
       <View style={styles.actions}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.deleteButton, { backgroundColor: c.backgroundHighlight }]}
           onPress={handleDeletePlaylist}
         >
           <Ionicons name="trash-outline" size={22} color={c.error} />
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.shuffleButton, { backgroundColor: c.backgroundHighlight }]}
           onPress={handleShuffle}
         >
           <Ionicons name="shuffle" size={24} color={c.textPrimary} />
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.playButton, { backgroundColor: c.primary, ...Shadows.lg }]}
           onPress={handlePlayAll}
         >
@@ -147,27 +135,19 @@ export default function PlaylistDetailScreen() {
     <View style={styles.emptyState}>
       <Ionicons name="musical-notes-outline" size={64} color={c.textMuted} />
       <Text style={[styles.emptyTitle, { color: c.textPrimary }]}>Lista vacía</Text>
-      <Text style={[styles.emptyText, { color: c.textSecondary }]}>
-        Agrega canciones desde el reproductor
-      </Text>
+      <Text style={[styles.emptyText, { color: c.textSecondary }]}>Agrega canciones desde el reproductor</Text>
     </View>
   );
 
   return (
     <ScreenWithPlayer>
       <View style={[styles.container, { backgroundColor: c.background, paddingTop: insets.top }]}>
-        <LinearGradient
-          colors={[c.primary + '40', c.background]}
-          style={styles.gradient}
-        />
+        <LinearGradient colors={[c.primary + '40', c.background]} style={styles.gradient} />
 
-        <TouchableOpacity 
-          style={[styles.backButton, { top: insets.top + Spacing.sm }]}
-          onPress={handleBack}
-        >
+        <TouchableOpacity style={[styles.backButton, { top: insets.top + Spacing.sm }]} onPress={handleBack}>
           <Ionicons name="chevron-back" size={28} color={c.textPrimary} />
         </TouchableOpacity>
-        
+
         <FlatList
           data={playlistTracks}
           renderItem={renderTrackItem}
@@ -177,7 +157,7 @@ export default function PlaylistDetailScreen() {
           contentContainerStyle={[
             styles.listContent,
             playlistTracks.length === 0 && styles.listContentEmpty,
-            { paddingBottom: Layout.screenPaddingBottom + insets.bottom }
+            { paddingBottom: Layout.screenPaddingBottom + insets.bottom },
           ]}
           showsVerticalScrollIndicator={false}
         />

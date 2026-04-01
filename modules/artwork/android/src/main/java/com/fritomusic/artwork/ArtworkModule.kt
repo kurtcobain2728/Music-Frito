@@ -9,6 +9,9 @@ import android.util.LruCache
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.concurrent.LinkedBlockingQueue
 
 class ArtworkModule : Module() {
@@ -17,6 +20,7 @@ class ArtworkModule : Module() {
         private const val POOL_SIZE = 3
         private const val CACHE_SIZE = 50
         private const val MAX_BITMAP_SIZE = 512
+        private const val DISK_CACHE_DIR = "artwork_cache"
     }
 
     private val retrieverPool = LinkedBlockingQueue<MediaMetadataRetriever>(POOL_SIZE).apply {
@@ -24,6 +28,42 @@ class ArtworkModule : Module() {
     }
 
     private val artworkCache = object : LruCache<String, String>(CACHE_SIZE) {}
+
+    private fun getDiskCacheDir(): File? {
+        val context = appContext.reactContext ?: return null
+        val dir = File(context.cacheDir, DISK_CACHE_DIR)
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun hashKey(uri: String, maxSize: Int): String {
+        val digest = MessageDigest.getInstance("MD5")
+        digest.update("$uri:$maxSize".toByteArray())
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun getDiskCachePath(uri: String, maxSize: Int): File? {
+        val dir = getDiskCacheDir() ?: return null
+        return File(dir, "${hashKey(uri, maxSize)}.jpg")
+    }
+
+    private fun readFromDiskCache(uri: String, maxSize: Int): String? {
+        val file = getDiskCachePath(uri, maxSize) ?: return null
+        if (!file.exists()) return null
+        return try {
+            val bytes = file.readBytes()
+            "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun writeToDiskCache(uri: String, maxSize: Int, jpegBytes: ByteArray) {
+        try {
+            val file = getDiskCachePath(uri, maxSize) ?: return
+            FileOutputStream(file).use { it.write(jpegBytes) }
+        } catch (_: Exception) {}
+    }
 
     private fun <T> withRetriever(block: (MediaMetadataRetriever) -> T): T {
         val retriever = retrieverPool.poll() ?: MediaMetadataRetriever()
@@ -39,8 +79,14 @@ class ArtworkModule : Module() {
     }
 
     private fun extractArtwork(uri: String, maxSize: Int): String? {
-        val cached = artworkCache.get(uri)
-        if (cached != null) return cached
+        val memCached = artworkCache.get("$uri:$maxSize")
+        if (memCached != null) return memCached
+
+        val diskCached = readFromDiskCache(uri, maxSize)
+        if (diskCached != null) {
+            artworkCache.put("$uri:$maxSize", diskCached)
+            return diskCached
+        }
 
         return withRetriever { retriever ->
             try {
@@ -64,8 +110,11 @@ class ArtworkModule : Module() {
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
                 bitmap.recycle()
 
-                val base64 = "data:image/jpeg;base64," + Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-                artworkCache.put(uri, base64)
+                val jpegBytes = stream.toByteArray()
+                writeToDiskCache(uri, maxSize, jpegBytes)
+
+                val base64 = "data:image/jpeg;base64," + Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                artworkCache.put("$uri:$maxSize", base64)
                 base64
             } catch (_: Exception) {
                 null
@@ -136,9 +185,26 @@ class ArtworkModule : Module() {
             }
         }
 
+        AsyncFunction("hasDiskCache") { uri: String, maxSize: Int ->
+            val file = getDiskCachePath(uri, if (maxSize > 0) maxSize else MAX_BITMAP_SIZE)
+            file?.exists() == true
+        }
+
+        AsyncFunction("getDiskCachePath") { uri: String, maxSize: Int ->
+            val file = getDiskCachePath(uri, if (maxSize > 0) maxSize else MAX_BITMAP_SIZE)
+            if (file?.exists() == true) "file://${file.absolutePath}" else null
+        }
+
         AsyncFunction("clearCache") {
             artworkCache.evictAll()
+            getDiskCacheDir()?.listFiles()?.forEach { it.delete() }
             true
+        }
+
+        AsyncFunction("getDiskCacheSize") {
+            val dir = getDiskCacheDir()
+            val files = dir?.listFiles() ?: return@AsyncFunction 0L
+            files.sumOf { it.length() }
         }
 
         OnDestroy {

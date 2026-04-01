@@ -5,7 +5,7 @@ import { ScreenWithPlayer } from '@/components/ScreenWithPlayer';
 import { TrackItem } from '@/components/TrackItem';
 import { BorderRadius, Layout, Shadows, Spacing, Typography } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
-import { usePlayer } from '@/contexts/PlayerContext';
+import { usePlaybackMetadata, usePlaybackControls } from '@/contexts/PlayerContext';
 import { useAudioLibrary } from '@/hooks/useAudioLibrary';
 import FileExplorerModule, { type DirectoryEntry, type FileEntry } from '@/modules/file-explorer';
 import type { Folder, Track } from '@/types/audio';
@@ -76,7 +76,8 @@ export default function HomeScreen() {
     scanLibrary,
     getTracksForFolder,
   } = useAudioLibrary();
-  const { state, controls } = usePlayer();
+  const { currentTrack, isPlaying } = usePlaybackMetadata();
+  const controls = usePlaybackControls();
   const { theme } = useTheme();
   const c = theme.colors;
   const flatListRef = useRef<FlatList>(null);
@@ -92,6 +93,7 @@ export default function HomeScreen() {
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const trackMapRef = useRef(new Map<string, Track>());
+  const dirCacheRef = useRef(new Map<string, NativeListItem[]>());
 
   useEffect(() => {
     if (libraryTracks.length === 0) return;
@@ -103,10 +105,21 @@ export default function HomeScreen() {
       map.set(filePath, t);
     }
     trackMapRef.current = map;
+    dirCacheRef.current.clear();
   }, [libraryTracks]);
 
-  const loadDirectory = useCallback(async (path: string) => {
+  const loadDirectory = useCallback(async (path: string, forceRefresh = false) => {
     if (!FileExplorerModule) return;
+
+    if (!forceRefresh) {
+      const cached = dirCacheRef.current.get(path);
+      if (cached) {
+        setNativeItems(cached);
+        setIsLoading(false);
+        return;
+      }
+    }
+
     setIsLoading(true);
     try {
       const result = await FileExplorerModule.listDirectory(path);
@@ -119,6 +132,7 @@ export default function HomeScreen() {
         const existing = map.get(file.uri) || map.get(file.path);
         listItems.push({ type: 'file', entry: file, track: existing });
       });
+      dirCacheRef.current.set(path, listItems);
       setNativeItems(listItems);
     } catch (_e) {
       setNativeItems([]);
@@ -228,7 +242,7 @@ export default function HomeScreen() {
 
   const handleRefresh = useCallback(async () => {
     if (useNativeExplorer) {
-      await loadDirectory(currentPath || rootPath);
+      await loadDirectory(currentPath || rootPath, true);
     } else {
       await scanLibrary();
     }
@@ -276,8 +290,8 @@ export default function HomeScreen() {
       }
       const file = item.entry;
       const track = item.track || fileToTrack(file);
-      const isCurrent = state.currentTrack?.id === track.id || state.currentTrack?.uri === track.uri;
-      const isPlayingCurrent = state.isPlaying && isCurrent;
+      const isCurrent = currentTrack?.id === track.id || currentTrack?.uri === track.uri;
+      const isPlayingCurrent = isPlaying && isCurrent;
       const format = getAudioFormat(file.filename);
       const lossless = isLosslessFormat(format);
 
@@ -315,7 +329,7 @@ export default function HomeScreen() {
         </Pressable>
       );
     },
-    [handleFolderPress, handleFilePress, state.currentTrack, state.isPlaying, c],
+    [handleFolderPress, handleFilePress, currentTrack, isPlaying, c],
   );
 
   const renderLegacyFolderItem = useCallback(
@@ -346,6 +360,12 @@ export default function HomeScreen() {
   }, []);
 
   const legacyKeyExtractor = useCallback((item: Folder) => item.id, []);
+
+  const ITEM_HEIGHT = 72;
+  const getItemLayout = useCallback(
+    (_: any, index: number) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index }),
+    [],
+  );
 
   const folderCount = useNativeExplorer ? nativeItems.filter(i => i.type === 'folder').length : 0;
   const fileCount = useNativeExplorer ? nativeItems.filter(i => i.type === 'file').length : 0;
@@ -434,13 +454,16 @@ export default function HomeScreen() {
             data={nativeItems}
             renderItem={renderNativeItem}
             keyExtractor={nativeKeyExtractor}
+            getItemLayout={getItemLayout}
             ListHeaderComponent={renderNativeHeader}
             ListEmptyComponent={renderEmptyState}
             contentContainerStyle={[styles.listContent, nativeItems.length === 0 && styles.listContentEmpty]}
             showsVerticalScrollIndicator={false}
             removeClippedSubviews={true}
-            maxToRenderPerBatch={15}
-            windowSize={10}
+            maxToRenderPerBatch={10}
+            windowSize={5}
+            initialNumToRender={15}
+            updateCellsBatchingPeriod={50}
             refreshControl={
               <RefreshControl
                 refreshing={isLoading}
@@ -473,13 +496,16 @@ export default function HomeScreen() {
           data={libraryFolders}
           renderItem={renderLegacyFolderItem}
           keyExtractor={legacyKeyExtractor}
+          getItemLayout={getItemLayout}
           ListHeaderComponent={renderLegacyHeader}
           ListEmptyComponent={renderEmptyState}
           contentContainerStyle={[styles.listContent, libraryFolders.length === 0 && styles.listContentEmpty]}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews={true}
-          maxToRenderPerBatch={15}
-          windowSize={10}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          initialNumToRender={15}
+          updateCellsBatchingPeriod={50}
           refreshControl={
             <RefreshControl
               refreshing={isScanning}

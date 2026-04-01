@@ -9,7 +9,10 @@ const CACHE_KEYS = {
   TRACKS: '@frito_music/library_tracks',
   FOLDERS: '@frito_music/library_folders',
   LAST_SCAN: '@frito_music/last_scan_at',
+  TRACK_COUNT: '@frito_music/library_track_count',
 };
+
+const RESCAN_THRESHOLD_MS = 6 * 60 * 60 * 1000;
 
 const SUPPORTED_EXTENSIONS = new Set([
   'mp3',
@@ -164,6 +167,7 @@ async function saveToCache(tracks: Track[], folders: Folder[]): Promise<void> {
       [CACHE_KEYS.TRACKS, tracksJson],
       [CACHE_KEYS.FOLDERS, foldersJson],
       [CACHE_KEYS.LAST_SCAN, Date.now().toString()],
+      [CACHE_KEYS.TRACK_COUNT, tracks.length.toString()],
     ]);
     logger.log(`Cached ${tracks.length} tracks and ${folders.length} folders`);
   } catch (error) {
@@ -175,13 +179,20 @@ async function loadFromCache(): Promise<{
   tracks: Track[];
   folders: Folder[];
   lastScanAt: number | null;
+  trackCount: number;
 } | null> {
   try {
-    const results = await AsyncStorage.multiGet([CACHE_KEYS.TRACKS, CACHE_KEYS.FOLDERS, CACHE_KEYS.LAST_SCAN]);
+    const results = await AsyncStorage.multiGet([
+      CACHE_KEYS.TRACKS,
+      CACHE_KEYS.FOLDERS,
+      CACHE_KEYS.LAST_SCAN,
+      CACHE_KEYS.TRACK_COUNT,
+    ]);
 
     const tracksJson = results[0][1];
     const foldersJson = results[1][1];
     const lastScanStr = results[2][1];
+    const countStr = results[3][1];
 
     if (tracksJson && foldersJson) {
       try {
@@ -194,6 +205,7 @@ async function loadFromCache(): Promise<{
           tracks,
           folders,
           lastScanAt: lastScanStr ? parseInt(lastScanStr, 10) : null,
+          trackCount: countStr ? parseInt(countStr, 10) : tracks.length,
         };
       } catch {
         return null;
@@ -204,6 +216,20 @@ async function loadFromCache(): Promise<{
   } catch (error) {
     logger.error('Error loading library from cache:', error);
     return null;
+  }
+}
+
+async function getQuickAssetCount(): Promise<number> {
+  try {
+    const { status } = await MediaLibrary.requestPermissionsAsync(false, ['audio']);
+    if (status !== 'granted') return -1;
+    const result = await MediaLibrary.getAssetsAsync({
+      mediaType: MediaLibrary.MediaType.audio,
+      first: 1,
+    });
+    return result.totalCount;
+  } catch {
+    return -1;
   }
 }
 
@@ -318,6 +344,21 @@ export function useAudioLibrary(): UseAudioLibraryResult {
         setLastScanAt(cached.lastScanAt);
         setIsLoaded(true);
         logger.log(`Loaded ${cached.tracks.length} tracks from cache`);
+
+        const timeSinceLastScan = cached.lastScanAt ? Date.now() - cached.lastScanAt : Infinity;
+        if (timeSinceLastScan > RESCAN_THRESHOLD_MS) {
+          InteractionManager.runAfterInteractions(async () => {
+            const currentCount = await getQuickAssetCount();
+            if (currentCount >= 0 && currentCount !== cached.trackCount) {
+              logger.log(`Track count changed (${cached.trackCount} -> ${currentCount}), rescanning`);
+              scanLibrary();
+            } else if (currentCount < 0) {
+              scanLibrary();
+            } else {
+              logger.log('Track count unchanged, skipping rescan');
+            }
+          });
+        }
       } else {
         InteractionManager.runAfterInteractions(() => {
           scanLibrary();

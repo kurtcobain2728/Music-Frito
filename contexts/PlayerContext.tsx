@@ -1,5 +1,6 @@
 import type { PlayerControls, PlayerState, RepeatMode, Track } from '@/types/audio';
 import MediaServiceModule from '@/modules/media-service';
+import { EventEmitter } from 'expo-modules-core';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import React, {
   createContext,
@@ -11,7 +12,23 @@ import React, {
   useState,
   type ReactNode,
 } from 'react';
-import { Platform, PermissionsAndroid, NativeEventEmitter, NativeModules } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
+
+interface PlaybackPositionValue {
+  position: number;
+  duration: number;
+}
+
+interface PlaybackMetadataValue {
+  currentTrack: Track | null;
+  queue: Track[];
+  currentIndex: number;
+  isPlaying: boolean;
+  isLoading: boolean;
+  volume: number;
+  shuffle: boolean;
+  repeat: RepeatMode;
+}
 
 interface PlayerContextValue {
   state: PlayerState;
@@ -31,6 +48,9 @@ const createDefaultPlayerState = (): PlayerState => ({
   repeat: 'off',
 });
 
+const PlaybackPositionContext = createContext<PlaybackPositionValue>({ position: 0, duration: 0 });
+const PlaybackMetadataContext = createContext<PlaybackMetadataValue | undefined>(undefined);
+const PlaybackControlsContext = createContext<PlayerControls | undefined>(undefined);
 const PlayerContext = createContext<PlayerContextValue | undefined>(undefined);
 
 interface PlayerProviderProps {
@@ -74,26 +94,22 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
   useEffect(() => {
     if (!MediaServiceModule) return;
 
-    let emitter: NativeEventEmitter | null = null;
+    let emitter: InstanceType<typeof EventEmitter> | null = null;
     const subscriptions: any[] = [];
 
     try {
-      emitter = new NativeEventEmitter(NativeModules.MediaServiceModule || (MediaServiceModule as any));
+      emitter = new EventEmitter(MediaServiceModule as any);
 
       subscriptions.push(
         emitter.addListener('onRemotePlay', () => {
-          if (player && stateRef.current.currentTrack) {
-            try {
-              player.play();
-            } catch (_e) {}
-          }
+          try {
+            player.play();
+          } catch (_e) {}
         }),
         emitter.addListener('onRemotePause', () => {
-          if (player) {
-            try {
-              player.pause();
-            } catch (_e) {}
-          }
+          try {
+            player.pause();
+          } catch (_e) {}
         }),
         emitter.addListener('onRemoteNext', () => {
           nextRef.current();
@@ -102,18 +118,14 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
           previousRef.current();
         }),
         emitter.addListener('onRemoteSeek', (event: { position: number }) => {
-          if (player) {
-            try {
-              player.seekTo(event.position / 1000);
-            } catch (_e) {}
-          }
+          try {
+            player.seekTo(event.position / 1000);
+          } catch (_e) {}
         }),
         emitter.addListener('onRemoteStop', () => {
-          if (player) {
-            try {
-              player.pause();
-            } catch (_e) {}
-          }
+          try {
+            player.pause();
+          } catch (_e) {}
         }),
       );
     } catch (_e) {}
@@ -509,6 +521,34 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     ],
   );
 
+  const positionValue: PlaybackPositionValue = useMemo(
+    () => ({ position: state.position, duration: state.duration }),
+    [state.position, state.duration],
+  );
+
+  const metadataValue: PlaybackMetadataValue = useMemo(
+    () => ({
+      currentTrack: state.currentTrack,
+      queue: state.queue,
+      currentIndex: state.currentIndex,
+      isPlaying: state.isPlaying,
+      isLoading: state.isLoading,
+      volume: state.volume,
+      shuffle: state.shuffle,
+      repeat: state.repeat,
+    }),
+    [
+      state.currentTrack,
+      state.queue,
+      state.currentIndex,
+      state.isPlaying,
+      state.isLoading,
+      state.volume,
+      state.shuffle,
+      state.repeat,
+    ],
+  );
+
   const contextValue: PlayerContextValue = useMemo(
     () => ({
       state,
@@ -517,7 +557,15 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     [state, controls],
   );
 
-  return <PlayerContext.Provider value={contextValue}>{children}</PlayerContext.Provider>;
+  return (
+    <PlaybackControlsContext.Provider value={controls}>
+      <PlaybackMetadataContext.Provider value={metadataValue}>
+        <PlaybackPositionContext.Provider value={positionValue}>
+          <PlayerContext.Provider value={contextValue}>{children}</PlayerContext.Provider>
+        </PlaybackPositionContext.Provider>
+      </PlaybackMetadataContext.Provider>
+    </PlaybackControlsContext.Provider>
+  );
 }
 
 export function usePlayer(): PlayerContextValue {
@@ -527,6 +575,26 @@ export function usePlayer(): PlayerContextValue {
     throw new Error('usePlayer must be used within a PlayerProvider');
   }
 
+  return context;
+}
+
+export function usePlaybackPosition(): PlaybackPositionValue {
+  return useContext(PlaybackPositionContext);
+}
+
+export function usePlaybackMetadata(): PlaybackMetadataValue {
+  const context = useContext(PlaybackMetadataContext);
+  if (context === undefined) {
+    throw new Error('usePlaybackMetadata must be used within a PlayerProvider');
+  }
+  return context;
+}
+
+export function usePlaybackControls(): PlayerControls {
+  const context = useContext(PlaybackControlsContext);
+  if (context === undefined) {
+    throw new Error('usePlaybackControls must be used within a PlayerProvider');
+  }
   return context;
 }
 

@@ -8,7 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
-import { PlayerProvider, usePlayer } from '@/contexts/PlayerContext';
+import { PlayerProvider, usePlaybackMetadata } from '@/contexts/PlayerContext';
 import { FavoritesProvider } from '@/contexts/FavoritesContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { EqualizerProvider, useEqualizer } from '@/contexts/EqualizerContext';
@@ -31,7 +31,7 @@ SplashScreen.preventAutoHideAsync();
  * Must be rendered inside both PlayerProvider and EqualizerProvider.
  */
 function EqualizerBridge() {
-  const { state: playerState } = usePlayer();
+  const playerState = usePlaybackMetadata();
   const { reattachEqualizer, state: eqState } = useEqualizer();
   const prevTrackIdRef = useRef<string | null>(null);
 
