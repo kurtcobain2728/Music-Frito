@@ -1,16 +1,27 @@
 import type { AudioFormat, Folder, Track } from '@/types/audio';
+import {
+  getAllTrackIds,
+  getAllTracks,
+  getFolders,
+  getScanMeta,
+  getTrackCount,
+  removeTracksByIds,
+  replaceAllTracks,
+  setScanMeta,
+  upsertTracks,
+} from '@/db/library';
 import { logger } from '@/utils/logger';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as MediaLibrary from 'expo-media-library';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { InteractionManager } from 'react-native';
 
-const CACHE_KEYS = {
-  TRACKS: '@frito_music/library_tracks',
-  FOLDERS: '@frito_music/library_folders',
-  LAST_SCAN: '@frito_music/last_scan_at',
-  TRACK_COUNT: '@frito_music/library_track_count',
-};
+const LEGACY_CACHE_KEYS = [
+  '@frito_music/library_tracks',
+  '@frito_music/library_folders',
+  '@frito_music/last_scan_at',
+  '@frito_music/library_track_count',
+];
 
 const RESCAN_THRESHOLD_MS = 6 * 60 * 60 * 1000;
 
@@ -108,7 +119,6 @@ function getAlbumArtworkUri(asset: MediaLibrary.Asset): string | undefined {
 function assetToTrack(asset: MediaLibrary.Asset): Track {
   const extension = getFileExtension(asset.filename);
   const folderPath = extractFolderPath(asset.uri);
-  const artworkUri = getAlbumArtworkUri(asset);
 
   return {
     id: asset.id,
@@ -117,7 +127,7 @@ function assetToTrack(asset: MediaLibrary.Asset): Track {
     artist: 'Unknown Artist',
     album: extractFolderName(folderPath),
     duration: (asset.duration || 0) * 1000,
-    artwork: artworkUri,
+    artwork: getAlbumArtworkUri(asset),
     folderPath,
     filename: asset.filename,
     format: getAudioFormat(extension),
@@ -126,97 +136,75 @@ function assetToTrack(asset: MediaLibrary.Asset): Track {
   };
 }
 
-function groupTracksByFolder(tracks: Track[]): Folder[] {
-  const folderMap = new Map<string, Track[]>();
-
-  for (let i = 0; i < tracks.length; i++) {
-    const track = tracks[i];
-    let arr = folderMap.get(track.folderPath);
-    if (!arr) {
-      arr = [];
-      folderMap.set(track.folderPath, arr);
-    }
-    arr.push(track);
-  }
-
-  const folders: Folder[] = [];
-  folderMap.forEach((folderTracks, path) => {
-    folderTracks.sort((a, b) => a.title.localeCompare(b.title));
-    folders.push({
-      id: path,
-      name: extractFolderName(path),
-      path,
-      trackCount: folderTracks.length,
-      previewTracks: folderTracks.slice(0, 4),
-      artwork: folderTracks[0]?.artwork,
-    });
-  });
-
-  return folders.sort((a, b) => a.name.localeCompare(b.name));
-}
-
 function yieldToUI(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-async function saveToCache(tracks: Track[], folders: Folder[]): Promise<void> {
+async function migrateFromAsyncStorage(): Promise<boolean> {
   try {
-    const tracksJson = JSON.stringify(tracks);
-    const foldersJson = JSON.stringify(folders);
-    await AsyncStorage.multiSet([
-      [CACHE_KEYS.TRACKS, tracksJson],
-      [CACHE_KEYS.FOLDERS, foldersJson],
-      [CACHE_KEYS.LAST_SCAN, Date.now().toString()],
-      [CACHE_KEYS.TRACK_COUNT, tracks.length.toString()],
-    ]);
-    logger.log(`Cached ${tracks.length} tracks and ${folders.length} folders`);
-  } catch (error) {
-    logger.error('Error saving library to cache:', error);
-  }
-}
+    const alreadyMigrated = await getScanMeta('migrated_from_async_storage');
+    if (alreadyMigrated === 'true') return false;
 
-async function loadFromCache(): Promise<{
-  tracks: Track[];
-  folders: Folder[];
-  lastScanAt: number | null;
-  trackCount: number;
-} | null> {
-  try {
-    const results = await AsyncStorage.multiGet([
-      CACHE_KEYS.TRACKS,
-      CACHE_KEYS.FOLDERS,
-      CACHE_KEYS.LAST_SCAN,
-      CACHE_KEYS.TRACK_COUNT,
-    ]);
+    const results = await AsyncStorage.multiGet([LEGACY_CACHE_KEYS[0], LEGACY_CACHE_KEYS[1], LEGACY_CACHE_KEYS[2]]);
 
     const tracksJson = results[0][1];
-    const foldersJson = results[1][1];
     const lastScanStr = results[2][1];
-    const countStr = results[3][1];
 
-    if (tracksJson && foldersJson) {
-      try {
-        await yieldToUI();
-        const tracks = JSON.parse(tracksJson);
-        await yieldToUI();
-        const folders = JSON.parse(foldersJson);
-        if (!Array.isArray(tracks) || !Array.isArray(folders)) return null;
-        return {
-          tracks,
-          folders,
-          lastScanAt: lastScanStr ? parseInt(lastScanStr, 10) : null,
-          trackCount: countStr ? parseInt(countStr, 10) : tracks.length,
-        };
-      } catch {
-        return null;
+    if (tracksJson) {
+      const tracks: Track[] = JSON.parse(tracksJson);
+      if (Array.isArray(tracks) && tracks.length > 0) {
+        logger.log(`Migrating ${tracks.length} tracks from AsyncStorage to SQLite...`);
+        await replaceAllTracks(tracks);
+        if (lastScanStr) {
+          await setScanMeta('last_scan_at', lastScanStr);
+        }
+        await setScanMeta('migrated_from_async_storage', 'true');
+        await AsyncStorage.multiRemove(LEGACY_CACHE_KEYS);
+        logger.log('Migration from AsyncStorage complete');
+        return true;
       }
     }
 
-    return null;
+    await setScanMeta('migrated_from_async_storage', 'true');
+    return false;
   } catch (error) {
-    logger.error('Error loading library from cache:', error);
-    return null;
+    logger.error('Error migrating from AsyncStorage:', error);
+    return false;
   }
+}
+
+async function scanAllAssets(): Promise<Track[]> {
+  const { status } = await MediaLibrary.requestPermissionsAsync(false, ['audio']);
+  if (status !== 'granted') {
+    throw new Error('Permiso denegado. Ve a Ajustes > Apps > Frito Music y activa permisos de almacenamiento.');
+  }
+
+  const allTracks: Track[] = [];
+  let hasMore = true;
+  let endCursor: string | undefined;
+
+  while (hasMore) {
+    const result = await MediaLibrary.getAssetsAsync({
+      mediaType: MediaLibrary.MediaType.audio,
+      first: PAGE_SIZE,
+      after: endCursor,
+      sortBy: [MediaLibrary.SortBy.default],
+    });
+
+    for (let i = 0; i < result.assets.length; i++) {
+      const asset = result.assets[i];
+      const ext = getFileExtension(asset.filename);
+      if (SUPPORTED_EXTENSIONS.has(ext)) {
+        allTracks.push(assetToTrack(asset));
+      }
+    }
+
+    hasMore = result.hasNextPage;
+    endCursor = result.endCursor;
+    await yieldToUI();
+  }
+
+  return allTracks;
 }
 
 async function getQuickAssetCount(): Promise<number> {
@@ -253,8 +241,18 @@ export function useAudioLibrary(): UseAudioLibraryResult {
   const [lastScanAt, setLastScanAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const hasLoadedCache = useRef(false);
+  const hasInitialized = useRef(false);
   const scanCancelledRef = useRef(false);
+
+  const loadFromDb = useCallback(async () => {
+    const dbTracks = await getAllTracks();
+    const dbFolders = await getFolders();
+    const lastScan = await getScanMeta('last_scan_at');
+    setTracks(dbTracks);
+    setFolders(dbFolders);
+    setLastScanAt(lastScan ? parseInt(lastScan, 10) : null);
+    return { tracks: dbTracks, lastScanAt: lastScan ? parseInt(lastScan, 10) : null };
+  }, []);
 
   const scanLibrary = useCallback(async () => {
     try {
@@ -262,56 +260,29 @@ export function useAudioLibrary(): UseAudioLibraryResult {
       setError(null);
       scanCancelledRef.current = false;
 
-      const { status } = await MediaLibrary.requestPermissionsAsync(false, ['audio']);
+      const scannedTracks = await scanAllAssets();
+      if (scanCancelledRef.current) return;
 
-      if (status !== 'granted') {
-        setError('Permiso denegado. Ve a Ajustes > Apps > Frito Music y activa permisos de almacenamiento.');
-        setIsScanning(false);
-        setIsLoaded(true);
-        return;
+      const existingIds = await getAllTrackIds();
+      const scannedIds = new Set(scannedTracks.map(t => t.id));
+
+      const removedIds = [...existingIds].filter(id => !scannedIds.has(id));
+      const newOrUpdated = scannedTracks;
+
+      if (removedIds.length > 0) {
+        await removeTracksByIds(removedIds);
+        logger.log(`Removed ${removedIds.length} tracks no longer on device`);
       }
 
-      const allTracks: Track[] = [];
-      let hasMore = true;
-      let endCursor: string | undefined;
-
-      while (hasMore) {
-        if (scanCancelledRef.current) return;
-
-        const result = await MediaLibrary.getAssetsAsync({
-          mediaType: MediaLibrary.MediaType.audio,
-          first: PAGE_SIZE,
-          after: endCursor,
-          sortBy: [MediaLibrary.SortBy.default],
-        });
-
-        for (let i = 0; i < result.assets.length; i++) {
-          const asset = result.assets[i];
-          const ext = getFileExtension(asset.filename);
-          if (SUPPORTED_EXTENSIONS.has(ext)) {
-            allTracks.push(assetToTrack(asset));
-          }
-        }
-
-        hasMore = result.hasNextPage;
-        endCursor = result.endCursor;
-
-        await yieldToUI();
-      }
+      await upsertTracks(newOrUpdated);
+      await setScanMeta('last_scan_at', Date.now().toString());
 
       if (scanCancelledRef.current) return;
 
-      await yieldToUI();
-      const groupedFolders = groupTracksByFolder(allTracks);
-
-      setTracks(allTracks);
-      setFolders(groupedFolders);
-      setLastScanAt(Date.now());
+      await loadFromDb();
       setIsLoaded(true);
 
-      InteractionManager.runAfterInteractions(() => {
-        saveToCache(allTracks, groupedFolders);
-      });
+      logger.log(`Scan complete: ${scannedTracks.length} tracks (${removedIds.length} removed)`);
     } catch (err) {
       if (scanCancelledRef.current) return;
       const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
@@ -329,49 +300,62 @@ export function useAudioLibrary(): UseAudioLibraryResult {
     } finally {
       setIsScanning(false);
     }
-  }, []);
+  }, [loadFromDb]);
+
+  const backgroundSync = useCallback(
+    async (cachedTrackCount: number, cachedLastScan: number | null) => {
+      const timeSinceLastScan = cachedLastScan ? Date.now() - cachedLastScan : Infinity;
+      if (timeSinceLastScan <= RESCAN_THRESHOLD_MS) {
+        const currentCount = await getQuickAssetCount();
+        if (currentCount >= 0 && currentCount === cachedTrackCount) {
+          logger.log('Track count unchanged, skipping background sync');
+          return;
+        }
+      }
+
+      logger.log('Starting background sync...');
+      await scanLibrary();
+    },
+    [scanLibrary],
+  );
 
   useEffect(() => {
-    if (hasLoadedCache.current) return;
-    hasLoadedCache.current = true;
+    if (hasInitialized.current) return;
+    hasInitialized.current = true;
 
-    const loadCache = async () => {
-      const cached = await loadFromCache();
+    const init = async () => {
+      try {
+        await migrateFromAsyncStorage();
 
-      if (cached && cached.tracks.length > 0) {
-        setTracks(cached.tracks);
-        setFolders(cached.folders);
-        setLastScanAt(cached.lastScanAt);
-        setIsLoaded(true);
-        logger.log(`Loaded ${cached.tracks.length} tracks from cache`);
+        const dbTrackCount = await getTrackCount();
 
-        const timeSinceLastScan = cached.lastScanAt ? Date.now() - cached.lastScanAt : Infinity;
-        if (timeSinceLastScan > RESCAN_THRESHOLD_MS) {
-          InteractionManager.runAfterInteractions(async () => {
-            const currentCount = await getQuickAssetCount();
-            if (currentCount >= 0 && currentCount !== cached.trackCount) {
-              logger.log(`Track count changed (${cached.trackCount} -> ${currentCount}), rescanning`);
-              scanLibrary();
-            } else if (currentCount < 0) {
-              scanLibrary();
-            } else {
-              logger.log('Track count unchanged, skipping rescan');
-            }
+        if (dbTrackCount > 0) {
+          const loaded = await loadFromDb();
+          setIsLoaded(true);
+          logger.log(`Loaded ${dbTrackCount} tracks from SQLite`);
+
+          InteractionManager.runAfterInteractions(() => {
+            backgroundSync(dbTrackCount, loaded.lastScanAt);
+          });
+        } else {
+          InteractionManager.runAfterInteractions(() => {
+            scanLibrary();
           });
         }
-      } else {
+      } catch (err) {
+        logger.error('Error initializing library:', err);
         InteractionManager.runAfterInteractions(() => {
           scanLibrary();
         });
       }
     };
 
-    loadCache();
+    init();
 
     return () => {
       scanCancelledRef.current = true;
     };
-  }, [scanLibrary]);
+  }, [scanLibrary, loadFromDb, backgroundSync]);
 
   const getTracksForFolder = useCallback(
     (folderId: string): Track[] => {

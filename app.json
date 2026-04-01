@@ -16,7 +16,9 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSAppleMusicUsageDescription": "Esta app necesita acceso a tu libreria de musica para reproducir tus canciones.",
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": [
+          "audio"
+        ]
       },
       "bundleIdentifier": "com.musicplayer.app"
     },
@@ -64,7 +66,8 @@
           "isAccessMediaLocationEnabled": false,
           "audioPermission": "Esta app necesita acceso a tus archivos de audio para reproducir tu musica."
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true
