@@ -1,326 +1,140 @@
-/**
- * Library Screen
- * Displays all tracks in the library with sorting and filtering options
- */
-
-import React, { useCallback, useState, useMemo } from 'react';
-import { 
-  View, 
-  Text, 
-  FlatList, 
-  StyleSheet,
-  TouchableOpacity,
-  RefreshControl,
-  ActivityIndicator,
-} from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { Colors, Typography, Spacing, Layout, BorderRadius } from '@/constants/theme';
-import { useAudioLibrary } from '@/hooks/useAudioLibrary';
-import { usePlayer } from '@/contexts/PlayerContext';
+import { ScreenWithPlayer } from '@/components/ScreenWithPlayer';
 import { TrackItem } from '@/components/TrackItem';
-import { formatTrackCount, formatLongDuration } from '@/utils/formatters';
+import { BorderRadius, Layout, Shadows, Spacing, Typography } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
+import { usePlayer } from '@/contexts/PlayerContext';
+import { useAudioLibrary } from '@/hooks/useAudioLibrary';
 import type { Track } from '@/types/audio';
-
-// =============================================================================
-// Types
-// =============================================================================
+import { formatLongDuration, formatTrackCount } from '@/utils/formatters';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    ActivityIndicator,
+    FlatList,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type SortOption = 'title' | 'artist' | 'album' | 'recent';
 
-// =============================================================================
-// Component
-// =============================================================================
-
 export default function LibraryScreen() {
   const insets = useSafeAreaInsets();
-  const { tracks, isScanning, isLoaded, error, scanLibrary } = useAudioLibrary();
+  const { tracks, isScanning, scanLibrary } = useAudioLibrary();
   const { state, controls } = usePlayer();
+  const { theme } = useTheme();
+  const c = theme.colors;
   const [sortBy, setSortBy] = useState<SortOption>('title');
+  const flatListRef = useRef<FlatList>(null);
 
-  /**
-   * Sort tracks based on selected option
-   */
   const sortedTracks = useMemo(() => {
     const sorted = [...tracks];
     switch (sortBy) {
-      case 'title':
-        return sorted.sort((a, b) => a.title.localeCompare(b.title));
-      case 'artist':
-        return sorted.sort((a, b) => a.artist.localeCompare(b.artist));
-      case 'album':
-        return sorted.sort((a, b) => a.album.localeCompare(b.album));
-      case 'recent':
-        return sorted.sort((a, b) => b.createdAt - a.createdAt);
-      default:
-        return sorted;
+      case 'title': return sorted.sort((a, b) => a.title.localeCompare(b.title));
+      case 'artist': return sorted.sort((a, b) => a.artist.localeCompare(b.artist));
+      case 'album': return sorted.sort((a, b) => a.album.localeCompare(b.album));
+      case 'recent': return sorted.sort((a, b) => b.createdAt - a.createdAt);
+      default: return sorted;
     }
   }, [tracks, sortBy]);
 
-  /**
-   * Calculate total duration of all tracks
-   */
-  const totalDuration = useMemo(() => {
-    return tracks.reduce((sum, track) => sum + track.duration, 0);
-  }, [tracks]);
+  const totalDuration = useMemo(() => tracks.reduce((s, t) => s + t.duration, 0), [tracks]);
 
-  /**
-   * Handle track press - play track with full library as queue
-   */
-  const handleTrackPress = useCallback((track: Track) => {
-    controls.playTrack(track, sortedTracks);
-  }, [controls, sortedTracks]);
-
-  /**
-   * Play all tracks (shuffle)
-   */
+  const handleTrackPress = useCallback((track: Track) => { controls.playTrack(track, sortedTracks); }, [controls, sortedTracks]);
   const handlePlayAllShuffle = useCallback(() => {
-    if (sortedTracks.length > 0) {
-      controls.playTrack(sortedTracks[0], sortedTracks);
-      controls.toggleShuffle();
-    }
+    if (sortedTracks.length > 0) { controls.playTrack(sortedTracks[0], sortedTracks); controls.toggleShuffle(); }
   }, [controls, sortedTracks]);
+  const handlePlayAll = useCallback(() => { if (sortedTracks.length > 0) controls.playTrack(sortedTracks[0], sortedTracks); }, [controls, sortedTracks]);
 
-  /**
-   * Render track item
-   */
   const renderTrackItem = useCallback(({ item, index }: { item: Track; index: number }) => (
-    <TrackItem
-      track={item}
-      index={index}
-      showIndex={true}
-      isPlaying={state.isPlaying && state.currentTrack?.id === item.id}
-      isCurrent={state.currentTrack?.id === item.id}
-      onPress={handleTrackPress}
-    />
+    <TrackItem track={item} index={index} showHeart={true} isPlaying={state.isPlaying && state.currentTrack?.id === item.id} isCurrent={state.currentTrack?.id === item.id} onPress={handleTrackPress} />
   ), [state.currentTrack, state.isPlaying, handleTrackPress]);
 
-  /**
-   * Get unique key for each track
-   */
   const keyExtractor = useCallback((item: Track) => item.id, []);
+  const getItemLayout = useCallback((_: any, index: number) => ({ length: Layout.trackItemHeight, offset: Layout.trackItemHeight * index, index }), []);
 
-  /**
-   * Render header with stats and controls
-   */
+  useEffect(() => { flatListRef.current?.scrollToOffset({ offset: 0, animated: true }); }, [sortBy]);
+
+  const sortOpts: { key: SortOption; label: string }[] = [
+    { key: 'title', label: 'Título' }, { key: 'artist', label: 'Artista' }, { key: 'album', label: 'Álbum' }, { key: 'recent', label: 'Reciente' },
+  ];
+
   const renderHeader = () => (
     <View style={styles.header}>
-      <Text style={styles.title}>Tu Biblioteca</Text>
-      
-      {/* Stats */}
-      <View style={styles.stats}>
-        <Text style={styles.statsText}>
-          {formatTrackCount(tracks.length)} • {formatLongDuration(totalDuration)}
-        </Text>
+      <View style={styles.headerTop}>
+        <Text style={[styles.title, { color: c.textPrimary }]}>Tu Biblioteca</Text>
       </View>
-
-      {/* Sort options */}
+      <Text style={[styles.stats, { color: c.textSecondary }]}>
+        {`${formatTrackCount(tracks.length)} • ${formatLongDuration(totalDuration)}`}
+      </Text>
       <View style={styles.sortContainer}>
-        <TouchableOpacity 
-          style={[styles.sortButton, sortBy === 'title' && styles.sortButtonActive]}
-          onPress={() => setSortBy('title')}
-        >
-          <Text style={[styles.sortText, sortBy === 'title' && styles.sortTextActive]}>
-            Título
-          </Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.sortButton, sortBy === 'artist' && styles.sortButtonActive]}
-          onPress={() => setSortBy('artist')}
-        >
-          <Text style={[styles.sortText, sortBy === 'artist' && styles.sortTextActive]}>
-            Artista
-          </Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.sortButton, sortBy === 'recent' && styles.sortButtonActive]}
-          onPress={() => setSortBy('recent')}
-        >
-          <Text style={[styles.sortText, sortBy === 'recent' && styles.sortTextActive]}>
-            Reciente
-          </Text>
-        </TouchableOpacity>
+        {sortOpts.map(({ key, label }) => (
+          <TouchableOpacity key={key} style={[styles.sortButton, { backgroundColor: sortBy === key ? c.primary : c.backgroundHighlight }]} onPress={() => setSortBy(key)}>
+            <Text style={[styles.sortText, { color: sortBy === key ? '#000' : c.textSecondary }]}>{label}</Text>
+          </TouchableOpacity>
+        ))}
       </View>
-
-      {/* Play all button */}
-      {tracks.length > 0 && (
-        <TouchableOpacity 
-          style={styles.playAllButton}
-          onPress={handlePlayAllShuffle}
-        >
-          <Ionicons name="shuffle" size={20} color={Colors.background} />
-          <Text style={styles.playAllText}>Reproducir aleatorio</Text>
-        </TouchableOpacity>
+      {sortedTracks.length > 0 && (
+        <View style={styles.actionButtons}>
+          <TouchableOpacity style={[styles.shuffleButton, { backgroundColor: c.backgroundHighlight }]} onPress={handlePlayAllShuffle}>
+            <Ionicons name="shuffle" size={20} color={c.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.playAllButton, { backgroundColor: c.primary }]} onPress={handlePlayAll}>
+            <Ionicons name="play" size={22} color="#000" />
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
 
-  /**
-   * Render empty state
-   */
-  const renderEmptyState = () => {
-    if (isScanning) {
-      return (
-        <View style={styles.emptyState}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.emptyText}>Cargando biblioteca...</Text>
-        </View>
-      );
-    }
-
-    return (
-      <View style={styles.emptyState}>
-        <Ionicons name="musical-notes" size={64} color={Colors.textMuted} />
-        <Text style={styles.emptyTitle}>Sin canciones</Text>
-        <Text style={styles.emptyText}>
-          Añade música a tu dispositivo y vuelve a escanear
-        </Text>
-      </View>
-    );
-  };
-
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Gradient background */}
-      <LinearGradient
-        colors={[Colors.backgroundHighlight, Colors.background]}
-        style={styles.gradient}
-      />
-      
-      {/* Track list */}
-      <FlatList
-        data={sortedTracks}
-        renderItem={renderTrackItem}
-        keyExtractor={keyExtractor}
-        ListHeaderComponent={renderHeader}
-        ListEmptyComponent={renderEmptyState}
-        contentContainerStyle={[
-          styles.listContent,
-          sortedTracks.length === 0 && styles.listContentEmpty,
-        ]}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={isScanning}
-            onRefresh={scanLibrary}
-            tintColor={Colors.primary}
-            colors={[Colors.primary]}
-          />
-        }
-      />
-    </View>
+    <ScreenWithPlayer>
+      <View style={[styles.container, { paddingTop: insets.top, backgroundColor: c.background }]}>
+        <LinearGradient colors={[c.backgroundHighlight, c.background]} style={styles.gradient} />
+        <FlatList
+          ref={flatListRef}
+          data={sortedTracks}
+          renderItem={renderTrackItem}
+          keyExtractor={keyExtractor}
+          getItemLayout={getItemLayout}
+          ListHeaderComponent={renderHeader}
+          ListEmptyComponent={
+            isScanning ? <View style={styles.emptyState}><ActivityIndicator size="large" color={c.primary} /><Text style={[styles.emptyText, { color: c.textSecondary }]}>Cargando...</Text></View>
+            : <View style={styles.emptyState}><Ionicons name="musical-notes" size={64} color={c.textMuted} /><Text style={[styles.emptyText, { color: c.textSecondary }]}>Sin canciones</Text></View>
+          }
+          contentContainerStyle={[styles.listContent, sortedTracks.length === 0 && styles.listContentEmpty]}
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={20}
+          windowSize={15}
+          initialNumToRender={20}
+          updateCellsBatchingPeriod={50}
+          refreshControl={<RefreshControl refreshing={isScanning} onRefresh={scanLibrary} tintColor={c.primary} colors={[c.primary]} />}
+        />
+      </View>
+    </ScreenWithPlayer>
   );
 }
 
-// =============================================================================
-// Styles
-// =============================================================================
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  gradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 300,
-  },
-  
-  // Header
-  header: {
-    paddingHorizontal: Spacing.base,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.base,
-  },
-  title: {
-    fontSize: Typography.fontSize['3xl'],
-    fontWeight: Typography.fontWeight.bold,
-    color: Colors.textPrimary,
-    marginBottom: Spacing.xs,
-  },
-  stats: {
-    marginBottom: Spacing.base,
-  },
-  statsText: {
-    fontSize: Typography.fontSize.sm,
-    color: Colors.textSecondary,
-  },
-  
-  // Sort options
-  sortContainer: {
-    flexDirection: 'row',
-    marginBottom: Spacing.base,
-  },
-  sortButton: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    marginRight: Spacing.sm,
-    borderRadius: BorderRadius.full,
-    backgroundColor: Colors.backgroundHighlight,
-  },
-  sortButtonActive: {
-    backgroundColor: Colors.primary,
-  },
-  sortText: {
-    fontSize: Typography.fontSize.sm,
-    fontWeight: Typography.fontWeight.medium,
-    color: Colors.textSecondary,
-  },
-  sortTextActive: {
-    color: Colors.background,
-  },
-  
-  // Play all button
-  playAllButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primary,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderRadius: BorderRadius.full,
-    alignSelf: 'flex-start',
-    marginTop: Spacing.sm,
-  },
-  playAllText: {
-    fontSize: Typography.fontSize.base,
-    fontWeight: Typography.fontWeight.semibold,
-    color: Colors.background,
-    marginLeft: Spacing.sm,
-  },
-  
-  // List
-  listContent: {
-    paddingBottom: Layout.screenPaddingBottom,
-  },
-  listContentEmpty: {
-    flex: 1,
-  },
-  
-  // Empty state
-  emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.xl,
-    marginTop: 100,
-  },
-  emptyTitle: {
-    fontSize: Typography.fontSize.xl,
-    fontWeight: Typography.fontWeight.bold,
-    color: Colors.textPrimary,
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.sm,
-  },
-  emptyText: {
-    fontSize: Typography.fontSize.base,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
+  container: { flex: 1 },
+  gradient: { position: 'absolute', top: 0, left: 0, right: 0, height: 300 },
+  header: { paddingHorizontal: Spacing.base, paddingTop: Spacing.lg, paddingBottom: Spacing.base },
+  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.xs },
+  title: { fontSize: Typography.fontSize['3xl'], fontWeight: Typography.fontWeight.bold },
+  stats: { fontSize: Typography.fontSize.sm, marginBottom: Spacing.base },
+  sortContainer: { flexDirection: 'row', marginBottom: Spacing.base, flexWrap: 'wrap', gap: Spacing.xs },
+  sortButton: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: BorderRadius.full },
+  sortText: { fontSize: Typography.fontSize.sm, fontWeight: Typography.fontWeight.medium },
+  actionButtons: { flexDirection: 'row', alignItems: 'center', marginTop: Spacing.sm },
+  shuffleButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },
+  playAllButton: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', paddingLeft: 3, ...Shadows.md },
+  listContent: { paddingBottom: Layout.screenPaddingBottom },
+  listContentEmpty: { flex: 1 },
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xl, marginTop: 100 },
+  emptyText: { fontSize: Typography.fontSize.base, textAlign: 'center', marginTop: Spacing.lg },
 });

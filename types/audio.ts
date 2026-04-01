@@ -171,18 +171,10 @@ export interface PlayerControls {
  * State of the audio library
  */
 export interface LibraryState {
-  /** All tracks in the library */
   tracks: Track[];
-  /** All folders with music */
   folders: Folder[];
-  /** User playlists */
-  playlists: Playlist[];
-  /** Whether library is being scanned */
   isScanning: boolean;
-  /** Whether initial load is complete */
   isLoaded: boolean;
-  /** Last scan timestamp */
   lastScanAt: number | null;
-  /** Any error during scanning */
   error: string | null;
 }

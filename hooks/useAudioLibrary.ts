@@ -1,21 +1,36 @@
 /**
  * useAudioLibrary Hook
  * Scans device for audio files using expo-media-library
+ * Caches library data to AsyncStorage for fast startup
  * Groups tracks by folders and extracts metadata
+ * Optimized for performance with incremental updates
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import type { AudioFormat, Folder, Track } from '@/types/audio';
+import { logger } from '@/utils/logger';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as MediaLibrary from 'expo-media-library';
-import type { Track, Folder, AudioFormat, LibraryState } from '@/types/audio';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 // =============================================================================
 // Constants
 // =============================================================================
 
 /**
- * Supported audio file extensions
+ * Cache keys for AsyncStorage
+ */
+const CACHE_KEYS = {
+  TRACKS: '@frito_music/library_tracks',
+  FOLDERS: '@frito_music/library_folders',
+  LAST_SCAN: '@frito_music/last_scan_at',
+};
+
+/**
+ * Supported audio file extensions - expanded list to catch all audio files
+ * Includes all common audio formats used on Android devices
  */
 const SUPPORTED_EXTENSIONS = [
+  // Common formats
   'mp3',
   'flac',
   'wav',
@@ -23,12 +38,43 @@ const SUPPORTED_EXTENSIONS = [
   'm4a',
   'ogg',
   'wma',
+  // Additional formats
+  'opus',
+  'webm',
+  'oga',
+  'mka',
+  'mid',
+  'midi',
+  'aiff',
+  'aif',
+  'ape',
+  'wv',      // WavPack
+  'mpc',     // Musepack
+  'ac3',
+  'dts',
+  'mp2',
+  'mp1',
+  '3gp',
+  '3gpp',
+  'amr',
+  'awb',
+  'caf',     // Core Audio Format
+  'au',      // Sun/Unix audio
+  'snd',
+  'ra',      // RealAudio
+  'rm',
+  'spx',     // Speex
+  'tta',     // TTA
+  'voc',
+  'gsm',
+  'dff',     // DSD
+  'dsf',     // DSD
 ];
 
 /**
  * Page size for fetching assets
  */
-const PAGE_SIZE = 500;
+const PAGE_SIZE = 1000;
 
 // =============================================================================
 // Helper Functions
@@ -36,8 +82,6 @@ const PAGE_SIZE = 500;
 
 /**
  * Extracts the file extension from a filename
- * @param filename - The filename to extract extension from
- * @returns Lowercase extension without the dot
  */
 function getFileExtension(filename: string): string {
   const parts = filename.split('.');
@@ -46,8 +90,6 @@ function getFileExtension(filename: string): string {
 
 /**
  * Determines the audio format from file extension
- * @param extension - File extension
- * @returns AudioFormat type
  */
 function getAudioFormat(extension: string): AudioFormat {
   const formatMap: Record<string, AudioFormat> = {
@@ -64,19 +106,15 @@ function getAudioFormat(extension: string): AudioFormat {
 
 /**
  * Extracts folder path from full file URI
- * @param uri - Full file URI
- * @returns Folder path
  */
 function extractFolderPath(uri: string): string {
   const parts = uri.split('/');
-  parts.pop(); // Remove filename
+  parts.pop();
   return parts.join('/');
 }
 
 /**
  * Extracts folder name from path
- * @param path - Full folder path
- * @returns Folder name
  */
 function extractFolderName(path: string): string {
   const parts = path.split('/').filter(Boolean);
@@ -85,15 +123,10 @@ function extractFolderName(path: string): string {
 
 /**
  * Cleans up title by removing extension and underscores
- * @param filename - Original filename
- * @returns Clean title
  */
 function cleanTitle(filename: string): string {
-  // Remove extension
   const withoutExt = filename.replace(/\.[^.]+$/, '');
-  // Replace underscores and dashes with spaces
   const cleaned = withoutExt.replace(/[_-]/g, ' ');
-  // Capitalize first letter of each word
   return cleaned
     .split(' ')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
@@ -101,49 +134,65 @@ function cleanTitle(filename: string): string {
 }
 
 /**
+ * Generates album art URI from Android MediaStore
+ * Uses the media ID to construct the album art content URI
+ */
+function getAlbumArtworkUri(asset: MediaLibrary.Asset): string | undefined {
+  // Extract numeric ID from asset ID for album art lookup
+  // Asset IDs in expo-media-library are typically in format like "123" or contain numbers
+  const assetId = asset.id;
+  
+  if (assetId) {
+    // Try to extract numeric ID
+    const numericId = assetId.match(/\d+/)?.[0];
+    if (numericId) {
+      // Use Android's MediaStore album art content provider
+      // This URI format works for embedded album art in audio files
+      return `content://media/external/audio/media/${numericId}/albumart`;
+    }
+  }
+  
+  return undefined;
+}
+
+/**
  * Converts MediaLibrary asset to Track
- * @param asset - MediaLibrary asset
- * @returns Track object
  */
 function assetToTrack(asset: MediaLibrary.Asset): Track {
   const extension = getFileExtension(asset.filename);
   const folderPath = extractFolderPath(asset.uri);
+  const artworkUri = getAlbumArtworkUri(asset);
   
   return {
     id: asset.id,
     uri: asset.uri,
     title: cleanTitle(asset.filename),
-    artist: 'Unknown Artist', // MediaLibrary doesn't provide this
-    album: extractFolderName(folderPath), // Use folder name as album
-    duration: (asset.duration || 0) * 1000, // Convert to ms
-    artwork: undefined, // Would need additional library for artwork
+    artist: 'Unknown Artist',
+    album: extractFolderName(folderPath),
+    duration: (asset.duration || 0) * 1000,
+    artwork: artworkUri,
     folderPath,
     filename: asset.filename,
     format: getAudioFormat(extension),
-    fileSize: asset.width || 0, // MediaLibrary uses width for file size in some cases
+    fileSize: 0,
     createdAt: asset.creationTime,
   };
 }
 
 /**
  * Groups tracks by folder and creates Folder objects
- * @param tracks - Array of tracks
- * @returns Array of folders
  */
 function groupTracksByFolder(tracks: Track[]): Folder[] {
   const folderMap = new Map<string, Track[]>();
   
-  // Group tracks by folder path
   tracks.forEach(track => {
     const existing = folderMap.get(track.folderPath) || [];
     existing.push(track);
     folderMap.set(track.folderPath, existing);
   });
   
-  // Convert to Folder objects
   const folders: Folder[] = [];
   folderMap.forEach((folderTracks, path) => {
-    // Sort tracks by title within folder
     const sortedTracks = folderTracks.sort((a, b) => 
       a.title.localeCompare(b.title)
     );
@@ -158,15 +207,81 @@ function groupTracksByFolder(tracks: Track[]): Folder[] {
     });
   });
   
-  // Sort folders by name
   return folders.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// =============================================================================
+// Cache Functions
+// =============================================================================
+
+/**
+ * Save library data to cache
+ */
+async function saveToCache(tracks: Track[], folders: Folder[]): Promise<void> {
+  try {
+    await AsyncStorage.multiSet([
+      [CACHE_KEYS.TRACKS, JSON.stringify(tracks)],
+      [CACHE_KEYS.FOLDERS, JSON.stringify(folders)],
+      [CACHE_KEYS.LAST_SCAN, Date.now().toString()],
+    ]);
+    logger.log(`Cached ${tracks.length} tracks and ${folders.length} folders`);
+  } catch (error) {
+    logger.error('Error saving library to cache:', error);
+  }
+}
+
+/**
+ * Load library data from cache
+ */
+async function loadFromCache(): Promise<{
+  tracks: Track[];
+  folders: Folder[];
+  lastScanAt: number | null;
+} | null> {
+  try {
+    const results = await AsyncStorage.multiGet([
+      CACHE_KEYS.TRACKS,
+      CACHE_KEYS.FOLDERS,
+      CACHE_KEYS.LAST_SCAN,
+    ]);
+    
+    const tracksJson = results[0][1];
+    const foldersJson = results[1][1];
+    const lastScanStr = results[2][1];
+    
+    if (tracksJson && foldersJson) {
+      try {
+        const tracks = JSON.parse(tracksJson);
+        const folders = JSON.parse(foldersJson);
+        if (!Array.isArray(tracks) || !Array.isArray(folders)) return null;
+        return {
+          tracks,
+          folders,
+          lastScanAt: lastScanStr ? parseInt(lastScanStr, 10) : null,
+        };
+      } catch {
+        return null;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    logger.error('Error loading library from cache:', error);
+    return null;
+  }
 }
 
 // =============================================================================
 // Hook
 // =============================================================================
 
-interface UseAudioLibraryResult extends LibraryState {
+interface UseAudioLibraryResult {
+  tracks: Track[];
+  folders: Folder[];
+  isScanning: boolean;
+  isLoaded: boolean;
+  lastScanAt: number | null;
+  error: string | null;
   /** Request permission and scan library */
   scanLibrary: () => Promise<void>;
   /** Get tracks for a specific folder */
@@ -183,10 +298,10 @@ export function useAudioLibrary(): UseAudioLibraryResult {
   const [isLoaded, setIsLoaded] = useState(false);
   const [lastScanAt, setLastScanAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // Ref to track if we've tried loading cache
+  const hasLoadedCache = useRef(false);
 
-  /**
-   * Request permission and scan the audio library
-   */
   const scanLibrary = useCallback(async () => {
     try {
       setIsScanning(true);
@@ -196,7 +311,7 @@ export function useAudioLibrary(): UseAudioLibraryResult {
       const { status } = await MediaLibrary.requestPermissionsAsync(false, ['audio']);
       
       if (status !== 'granted') {
-        setError('Permiso denegado. Ve a Ajustes > Apps > Music Player y activa permisos de almacenamiento.');
+        setError('Permiso denegado. Ve a Ajustes > Apps > Frito Music y activa permisos de almacenamiento.');
         setIsScanning(false);
         setIsLoaded(true);
         return;
@@ -237,8 +352,10 @@ export function useAudioLibrary(): UseAudioLibraryResult {
       setLastScanAt(Date.now());
       setIsLoaded(true);
       
+      // Save to cache for next app launch
+      await saveToCache(allTracks, groupedFolders);
+      
     } catch (err) {
-      // Check if error is due to Expo Go limitations
       const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
       
       if (errorMessage.includes('AUDIO permission') || errorMessage.includes('AndroidManifest')) {
@@ -247,18 +364,34 @@ export function useAudioLibrary(): UseAudioLibraryResult {
         setError(errorMessage);
       }
       
-      console.error('Error scanning audio library:', err);
+      logger.error('Error scanning audio library:', err);
       setIsLoaded(true);
     } finally {
       setIsScanning(false);
     }
   }, []);
 
-  /**
-   * Get all tracks for a specific folder
-   * @param folderId - Folder ID (path)
-   * @returns Array of tracks in the folder
-   */
+  useEffect(() => {
+    if (hasLoadedCache.current) return;
+    hasLoadedCache.current = true;
+    
+    const loadCache = async () => {
+      const cached = await loadFromCache();
+      
+      if (cached && cached.tracks.length > 0) {
+        setTracks(cached.tracks);
+        setFolders(cached.folders);
+        setLastScanAt(cached.lastScanAt);
+        setIsLoaded(true);
+        logger.log(`Loaded ${cached.tracks.length} tracks from cache`);
+      } else {
+        scanLibrary();
+      }
+    };
+    
+    loadCache();
+  }, [scanLibrary]);
+
   const getTracksForFolder = useCallback((folderId: string): Track[] => {
     return tracks
       .filter(track => track.folderPath === folderId)
@@ -266,9 +399,7 @@ export function useAudioLibrary(): UseAudioLibraryResult {
   }, [tracks]);
 
   /**
-   * Search tracks by query (searches title, artist, album)
-   * @param query - Search query
-   * @returns Array of matching tracks
+   * Search tracks by query
    */
   const searchTracks = useCallback((query: string): Track[] => {
     if (!query.trim()) return [];
@@ -282,17 +413,9 @@ export function useAudioLibrary(): UseAudioLibraryResult {
     );
   }, [tracks]);
 
-  // Auto-scan on mount
-  useEffect(() => {
-    if (!isLoaded && !isScanning) {
-      scanLibrary();
-    }
-  }, [isLoaded, isScanning, scanLibrary]);
-
   return {
     tracks,
     folders,
-    playlists: [], // Playlists not implemented yet
     isScanning,
     isLoaded,
     lastScanAt,

@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "Music Player",
+    "name": "Frito Music",
     "slug": "music-player",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/Logo.png",
     "scheme": "musicplayer",
     "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./assets/images/Logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#121212"
     },
@@ -17,13 +17,15 @@
       "infoPlist": {
         "NSAppleMusicUsageDescription": "Esta app necesita acceso a tu librería de música para reproducir tus canciones.",
         "UIBackgroundModes": [
+          "audio",
           "audio"
         ]
-      }
+      },
+      "bundleIdentifier": "com.musicplayer.app"
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/Logo.png",
         "backgroundColor": "#121212"
       },
       "edgeToEdgeEnabled": true,
@@ -31,11 +33,14 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_AUDIO",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.WAKE_LOCK",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
-        "android.permission.ACCESS_MEDIA_LOCATION",
         "android.permission.READ_MEDIA_VIDEO"
       ],
       "package": "com.musicplayer.app"
@@ -58,7 +63,7 @@
         {
           "photosPermission": "Esta app necesita acceso a tus fotos para mostrar carátulas de álbumes.",
           "savePhotosPermission": false,
-          "isAccessMediaLocationEnabled": true,
+          "isAccessMediaLocationEnabled": false,
           "audioPermission": "Esta app necesita acceso a tus archivos de audio para reproducir tu música."
         }
       ]

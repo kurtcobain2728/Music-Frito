@@ -1,45 +1,144 @@
-/**
- * ProgressBar Component
- * Interactive progress bar for audio playback with seek functionality
- */
-
-import React, { memo, useState, useCallback } from 'react';
-import { 
-  View, 
-  StyleSheet,
-  LayoutChangeEvent,
-  Text,
-} from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle,
-  withTiming,
-  runOnJS,
-} from 'react-native-reanimated';
-import { Colors, Typography, Spacing, BorderRadius } from '@/constants/theme';
+import { BorderRadius, Spacing, Typography } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
 import { formatDuration } from '@/utils/formatters';
-
-// =============================================================================
-// Types
-// =============================================================================
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    GestureResponderEvent,
+    LayoutChangeEvent,
+    PanResponder,
+    PanResponderGestureState,
+    StyleSheet,
+    Text,
+    View,
+} from 'react-native';
+import Animated, {
+    Easing,
+    useAnimatedStyle,
+    useSharedValue,
+    withRepeat,
+    withSpring,
+    withTiming,
+} from 'react-native-reanimated';
 
 interface ProgressBarProps {
-  /** Current position in milliseconds */
   position: number;
-  /** Total duration in milliseconds */
   duration: number;
-  /** Callback when user seeks to a position */
   onSeek: (position: number) => void;
-  /** Whether to show time labels */
   showTimeLabels?: boolean;
-  /** Height of the progress bar */
   height?: number;
+  isPlaying?: boolean;
 }
 
-// =============================================================================
-// Component
-// =============================================================================
+const WAVE_SEGMENT_COUNT = 40;
+
+function WaveBar({
+  progress,
+  isPlaying,
+  fillColor,
+  trackColor,
+  height,
+  barWidth,
+}: {
+  progress: number;
+  isPlaying: boolean;
+  fillColor: string;
+  trackColor: string;
+  height: number;
+  barWidth: number;
+}) {
+  const phase = useSharedValue(0);
+  const amplitude = useSharedValue(0);
+
+  useEffect(() => {
+    if (isPlaying) {
+      amplitude.value = withTiming(1, { duration: 300 });
+      phase.value = withRepeat(
+        withTiming(2 * Math.PI, { duration: 1200, easing: Easing.linear }),
+        -1,
+        false
+      );
+    } else {
+      amplitude.value = withTiming(0, { duration: 400 });
+    }
+  }, [isPlaying, phase, amplitude]);
+
+  const segments = useMemo(() => {
+    return Array.from({ length: WAVE_SEGMENT_COUNT }, (_, i) => i);
+  }, []);
+
+  const filledCount = Math.round(progress * WAVE_SEGMENT_COUNT);
+  const segmentWidth = barWidth > 0 ? barWidth / WAVE_SEGMENT_COUNT : 0;
+
+  return (
+    <View style={[styles.waveContainer, { height: height + 12 }]}>
+      {segments.map((i) => {
+        const isFilled = i < filledCount;
+        return (
+          <WaveSegment
+            key={i}
+            index={i}
+            segmentWidth={segmentWidth}
+            baseHeight={height}
+            isFilled={isFilled}
+            fillColor={fillColor}
+            trackColor={trackColor}
+            phase={phase}
+            amplitude={amplitude}
+            isPlaying={isPlaying}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+function WaveSegment({
+  index,
+  segmentWidth,
+  baseHeight,
+  isFilled,
+  fillColor,
+  trackColor,
+  phase,
+  amplitude,
+  isPlaying,
+}: {
+  index: number;
+  segmentWidth: number;
+  baseHeight: number;
+  isFilled: boolean;
+  fillColor: string;
+  trackColor: string;
+  phase: { value: number };
+  amplitude: { value: number };
+  isPlaying: boolean;
+}) {
+  const segAnimStyle = useAnimatedStyle(() => {
+    const freq = 0.5;
+    const wave = Math.sin(phase.value + index * freq) * amplitude.value;
+    const extraHeight = wave * (baseHeight * 0.8);
+    const h = baseHeight + extraHeight;
+    return {
+      height: Math.max(2, h),
+      backgroundColor: isFilled ? fillColor : trackColor,
+    };
+  });
+
+  if (segmentWidth <= 0) return null;
+
+  return (
+    <Animated.View
+      style={[
+        {
+          width: Math.max(1, segmentWidth - 1),
+          borderRadius: 1,
+          marginHorizontal: 0.5,
+        },
+        segAnimStyle,
+      ]}
+    />
+  );
+}
 
 function ProgressBarComponent({
   position,
@@ -47,120 +146,109 @@ function ProgressBarComponent({
   onSeek,
   showTimeLabels = true,
   height = 4,
+  isPlaying = false,
 }: ProgressBarProps) {
-  // Track width for calculating seek position
+  const { theme } = useTheme();
+  const c = theme.colors;
   const [barWidth, setBarWidth] = useState(0);
-  
-  // Animated values for interaction
+  const [barX, setBarX] = useState(0);
+  const trackRef = useRef<View>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragProgress, setDragProgress] = useState(0);
   const thumbScale = useSharedValue(1);
-  const isDragging = useSharedValue(false);
-  const dragPosition = useSharedValue(0);
 
-  // Calculate progress percentage
   const progress = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
+  const displayProgress = isDragging ? dragProgress : progress;
 
-  /**
-   * Handle layout to get bar width
-   */
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
-    setBarWidth(event.nativeEvent.layout.width);
+    const { width } = event.nativeEvent.layout;
+    setBarWidth(width);
+    trackRef.current?.measureInWindow((pageX) => {
+      if (pageX !== undefined) setBarX(pageX);
+    });
   }, []);
 
-  /**
-   * Calculate position from x coordinate
-   */
-  const calculatePositionFromX = useCallback((x: number): number => {
+  const calculateProgressFromX = useCallback((pageX: number): number => {
     if (barWidth <= 0) return 0;
-    const clampedX = Math.max(0, Math.min(barWidth, x));
-    return (clampedX / barWidth) * duration;
-  }, [barWidth, duration]);
+    const relativeX = pageX - barX;
+    return Math.max(0, Math.min(1, relativeX / barWidth));
+  }, [barWidth, barX]);
 
-  /**
-   * Handle seek callback
-   */
-  const handleSeek = useCallback((newPosition: number) => {
-    onSeek(newPosition);
-  }, [onSeek]);
+  const handleSeek = useCallback((newProgress: number) => {
+    const newPosition = newProgress * duration;
+    if (isFinite(newPosition) && !isNaN(newPosition) && newPosition >= 0) {
+      onSeek(Math.min(newPosition, duration));
+    }
+  }, [onSeek, duration]);
 
-  // Gesture handler for seeking
-  const panGesture = Gesture.Pan()
-    .onBegin((event) => {
-      isDragging.value = true;
-      thumbScale.value = withTiming(1.5, { duration: 100 });
-      dragPosition.value = event.x;
-    })
-    .onUpdate((event) => {
-      dragPosition.value = event.x;
-    })
-    .onEnd((event) => {
-      isDragging.value = false;
-      thumbScale.value = withTiming(1, { duration: 100 });
-      const newPosition = calculatePositionFromX(event.x);
-      runOnJS(handleSeek)(newPosition);
-    })
-    .onFinalize(() => {
-      isDragging.value = false;
-      thumbScale.value = withTiming(1, { duration: 100 });
-    });
+  const panResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: (evt: GestureResponderEvent) => {
+      setIsDragging(true);
+      thumbScale.value = withSpring(1.5, { damping: 15, stiffness: 300 });
+      setDragProgress(calculateProgressFromX(evt.nativeEvent.pageX));
+    },
+    onPanResponderMove: (evt: GestureResponderEvent, _gs: PanResponderGestureState) => {
+      setDragProgress(calculateProgressFromX(evt.nativeEvent.pageX));
+    },
+    onPanResponderRelease: (evt: GestureResponderEvent) => {
+      handleSeek(calculateProgressFromX(evt.nativeEvent.pageX));
+      setIsDragging(false);
+      thumbScale.value = withSpring(1, { damping: 15, stiffness: 300 });
+    },
+    onPanResponderTerminate: () => {
+      setIsDragging(false);
+      thumbScale.value = withSpring(1, { damping: 15, stiffness: 300 });
+    },
+  }), [calculateProgressFromX, handleSeek, thumbScale]);
 
-  // Tap gesture for quick seek
-  const tapGesture = Gesture.Tap()
-    .onEnd((event) => {
-      const newPosition = calculatePositionFromX(event.x);
-      runOnJS(handleSeek)(newPosition);
-    });
-
-  // Combine gestures
-  const composedGesture = Gesture.Exclusive(panGesture, tapGesture);
-
-  // Animated styles for thumb
   const thumbAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: thumbScale.value }],
   }));
 
   return (
     <View style={styles.container}>
-      {/* Progress Bar Track */}
-      <GestureDetector gesture={composedGesture}>
-        <View 
-          style={[styles.trackContainer, { height: height + 20 }]}
-          onLayout={handleLayout}
-        >
-          {/* Background track */}
-          <View style={[styles.track, { height }]}>
-            {/* Filled portion */}
-            <View 
+      <View
+        ref={trackRef}
+        style={[styles.trackContainer, { height: height + 30 }]}
+        onLayout={handleLayout}
+        {...panResponder.panHandlers}
+      >
+        {isDragging ? (
+          <View style={[styles.track, { height, backgroundColor: c.progressBar }]}>
+            <View
               style={[
-                styles.filled, 
-                { 
-                  height,
-                  width: `${progress * 100}%`,
-                }
-              ]} 
+                styles.filled,
+                { height, width: `${displayProgress * 100}%`, backgroundColor: c.progressBarFill }
+              ]}
             />
           </View>
-
-          {/* Thumb indicator */}
-          <Animated.View 
-            style={[
-              styles.thumb,
-              thumbAnimatedStyle,
-              { 
-                left: `${progress * 100}%`,
-                marginLeft: -6, // Center the thumb
-              }
-            ]}
+        ) : (
+          <WaveBar
+            progress={displayProgress}
+            isPlaying={isPlaying}
+            fillColor={c.progressBarFill}
+            trackColor={c.progressBar}
+            height={height}
+            barWidth={barWidth}
           />
-        </View>
-      </GestureDetector>
-
-      {/* Time Labels */}
+        )}
+        <Animated.View
+          style={[
+            styles.thumb,
+            thumbAnimatedStyle,
+            { left: `${displayProgress * 100}%`, marginLeft: -8, backgroundColor: c.sliderThumb }
+          ]}
+        />
+      </View>
       {showTimeLabels && (
         <View style={styles.timeContainer}>
-          <Text style={styles.timeText}>
-            {formatDuration(position)}
+          <Text style={[styles.timeText, { color: c.textMuted }]}>
+            {formatDuration(isDragging ? dragProgress * duration : position)}
           </Text>
-          <Text style={styles.timeText}>
+          <Text style={[styles.timeText, { color: c.textMuted }]}>
             {formatDuration(duration)}
           </Text>
         </View>
@@ -169,47 +257,27 @@ function ProgressBarComponent({
   );
 }
 
-// =============================================================================
-// Styles
-// =============================================================================
-
 const styles = StyleSheet.create({
-  container: {
+  container: { width: '100%' },
+  trackContainer: { width: '100%', justifyContent: 'center', paddingHorizontal: 6 },
+  track: { width: '100%', borderRadius: BorderRadius.full, overflow: 'hidden' },
+  filled: { borderRadius: BorderRadius.full },
+  waveContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     width: '100%',
   },
-  
-  // Track
-  trackContainer: {
-    width: '100%',
-    justifyContent: 'center',
-    paddingHorizontal: 6, // Space for thumb overflow
-  },
-  track: {
-    width: '100%',
-    backgroundColor: Colors.progressBar,
-    borderRadius: BorderRadius.full,
-    overflow: 'hidden',
-  },
-  filled: {
-    backgroundColor: Colors.progressBarFilled,
-    borderRadius: BorderRadius.full,
-  },
-  
-  // Thumb
   thumb: {
     position: 'absolute',
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: Colors.sliderThumb,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
     shadowRadius: 3,
     elevation: 3,
   },
-  
-  // Time labels
   timeContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -218,14 +286,9 @@ const styles = StyleSheet.create({
   },
   timeText: {
     fontSize: Typography.fontSize.xs,
-    color: Colors.textMuted,
     fontWeight: Typography.fontWeight.regular,
   },
 });
-
-// =============================================================================
-// Export
-// =============================================================================
 
 export const ProgressBar = memo(ProgressBarComponent);
 export default ProgressBar;

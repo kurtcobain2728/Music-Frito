@@ -164,13 +164,13 @@ export const Layout = {
   // Screen padding
   screenPaddingHorizontal: 16,
   screenPaddingTop: 16,
-  screenPaddingBottom: 100, // Space for mini player and tab bar
+  screenPaddingBottom: 140, // Space for mini player and tab bar (increased)
 
   // Mini player height
   miniPlayerHeight: 64,
 
   // Tab bar height
-  tabBarHeight: 60,
+  tabBarHeight: 56,
 
   // Full player
   fullPlayerArtworkSize: 300,

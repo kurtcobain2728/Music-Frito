@@ -1,39 +1,28 @@
-/**
- * PlayerContext - Global state management for audio playback
- * Provides centralized control over the audio player across the app
- */
-
-import React, { 
-  createContext, 
-  useContext, 
-  useState, 
-  useCallback, 
-  useRef, 
-  useEffect,
-  type ReactNode 
-} from 'react';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import type { 
-  Track, 
-  PlayerState, 
-  PlayerControls, 
-  RepeatMode 
+import type {
+    PlayerControls,
+    PlayerState,
+    RepeatMode,
+    Track
 } from '@/types/audio';
-
-// =============================================================================
-// Context Types
-// =============================================================================
+import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import React, {
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ReactNode
+} from 'react';
+import { Platform, PermissionsAndroid } from 'react-native';
 
 interface PlayerContextValue {
   state: PlayerState;
   controls: PlayerControls;
 }
 
-// =============================================================================
-// Default State
-// =============================================================================
-
-const defaultPlayerState: PlayerState = {
+const createDefaultPlayerState = (): PlayerState => ({
   currentTrack: null,
   queue: [],
   currentIndex: -1,
@@ -44,61 +33,103 @@ const defaultPlayerState: PlayerState = {
   volume: 1.0,
   shuffle: false,
   repeat: 'off',
-};
-
-// =============================================================================
-// Context Creation
-// =============================================================================
+});
 
 const PlayerContext = createContext<PlayerContextValue | undefined>(undefined);
-
-// =============================================================================
-// Provider Component
-// =============================================================================
 
 interface PlayerProviderProps {
   children: ReactNode;
 }
 
+const MAX_AUTOPLAY_RETRIES = 5;
+const AUTOPLAY_BASE_DELAY = 200;
+
 export function PlayerProvider({ children }: PlayerProviderProps) {
-  // State management
-  const [state, setState] = useState<PlayerState>(defaultPlayerState);
-  
-  // Original queue before shuffle (for restoring order)
+  const [state, setState] = useState<PlayerState>(createDefaultPlayerState);
+
   const originalQueueRef = useRef<Track[]>([]);
-  
-  // Expo Audio player instance
+  const shouldAutoPlayRef = useRef(false);
+  const trackFinishedRef = useRef(false);
+  const stateRef = useRef<PlayerState>(createDefaultPlayerState());
+  const autoplayGenerationRef = useRef(0);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   const player = useAudioPlayer(
-    state.currentTrack?.uri 
-      ? { uri: state.currentTrack.uri } 
+    state.currentTrack?.uri
+      ? { uri: state.currentTrack.uri }
       : null
   );
-  
-  // Get real-time player status
+
   const status = useAudioPlayerStatus(player);
 
-  // Sync player status with state
+  useEffect(() => {
+    const setupAudio = async () => {
+      try {
+        if (Platform.OS === 'android' && Platform.Version >= 33) {
+          try {
+            await PermissionsAndroid.request(
+              PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+            );
+          } catch (_e) {}
+        }
+
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          shouldPlayInBackground: true,
+          shouldRouteThroughEarpiece: false,
+        });
+      } catch (_e) {}
+    };
+    setupAudio();
+  }, []);
+
+  useEffect(() => {
+    if (state.currentTrack && player) {
+      try {
+        if ('setNowPlayingMetadata' in player) {
+          const track = state.currentTrack;
+          (player as any).setNowPlayingMetadata({
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            artwork: track.artwork,
+            duration: track.duration / 1000,
+          });
+        }
+      } catch (_e) {}
+    }
+  }, [state.currentTrack?.id, player]);
+
   useEffect(() => {
     if (status) {
-      setState(prev => ({
-        ...prev,
-        isPlaying: status.playing,
-        position: status.currentTime * 1000, // Convert to ms
-        duration: status.duration * 1000,    // Convert to ms
-        isLoading: status.isBuffering,
-      }));
+      const playing = status.playing;
+      const position = status.currentTime * 1000;
+      const duration = status.duration * 1000;
+      const isBuffering = status.isBuffering;
+
+      setState(prev => {
+        if (
+          prev.isPlaying === playing &&
+          Math.abs(prev.position - position) < 250 &&
+          Math.abs(prev.duration - duration) < 100 &&
+          prev.isLoading === isBuffering
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          isPlaying: playing,
+          position,
+          duration,
+          isLoading: isBuffering,
+        };
+      });
     }
   }, [status]);
 
-  // =============================================================================
-  // Shuffle Logic
-  // =============================================================================
-
-  /**
-   * Shuffles an array using Fisher-Yates algorithm
-   * @param array - Array to shuffle
-   * @returns Shuffled array
-   */
   const shuffleArray = <T,>(array: T[]): T[] => {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -108,168 +139,185 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     return shuffled;
   };
 
-  // =============================================================================
-  // Player Controls
-  // =============================================================================
-
-  /**
-   * Play/resume the current track
-   */
   const play = useCallback(async () => {
-    if (player && state.currentTrack) {
-      await player.play();
-    }
-  }, [player, state.currentTrack]);
-
-  /**
-   * Pause the current track
-   */
-  const pause = useCallback(async () => {
-    if (player) {
-      await player.pause();
+    if (player && stateRef.current.currentTrack) {
+      try {
+        await player.play();
+      } catch (_e) {}
     }
   }, [player]);
 
-  /**
-   * Toggle between play and pause
-   */
-  const togglePlayPause = useCallback(async () => {
-    if (state.isPlaying) {
-      await pause();
-    } else {
-      await play();
+  const pause = useCallback(async () => {
+    if (player) {
+      try {
+        await player.pause();
+      } catch (_e) {}
     }
-  }, [state.isPlaying, play, pause]);
+  }, [player]);
 
-  /**
-   * Play a specific track, optionally with a new queue
-   * @param track - Track to play
-   * @param queue - Optional new queue to set
-   */
+  const togglePlayPause = useCallback(async () => {
+    try {
+      if (stateRef.current.isPlaying) {
+        await pause();
+      } else {
+        await play();
+      }
+    } catch (_e) {}
+  }, [play, pause]);
+
   const playTrack = useCallback(async (track: Track, queue?: Track[]) => {
     const newQueue = queue || [track];
     const trackIndex = newQueue.findIndex(t => t.id === track.id);
-    
-    // Store original queue for shuffle restore
+
     originalQueueRef.current = newQueue;
-    
-    setState(prev => ({
-      ...prev,
-      currentTrack: track,
-      queue: prev.shuffle ? shuffleArray(newQueue) : newQueue,
-      currentIndex: trackIndex >= 0 ? trackIndex : 0,
-      isLoading: true,
-    }));
+    shouldAutoPlayRef.current = true;
+    trackFinishedRef.current = false;
+
+    setState(prev => {
+      const finalQueue = prev.shuffle ? shuffleArray(newQueue) : newQueue;
+      const finalIndex = prev.shuffle
+        ? finalQueue.findIndex(t => t.id === track.id)
+        : (trackIndex >= 0 ? trackIndex : 0);
+
+      return {
+        ...prev,
+        currentTrack: track,
+        queue: finalQueue,
+        currentIndex: finalIndex >= 0 ? finalIndex : 0,
+        isLoading: true,
+        position: 0,
+        duration: 0,
+      };
+    });
   }, []);
 
-  /**
-   * Skip to the next track
-   */
   const next = useCallback(async () => {
-    if (state.queue.length === 0) return;
+    const s = stateRef.current;
+    if (s.queue.length === 0) return;
 
-    let nextIndex = state.currentIndex + 1;
+    if (s.repeat === 'one') {
+      if (player) {
+        try {
+          await player.seekTo(0);
+          await player.play();
+        } catch (_e) {}
+      }
+      return;
+    }
 
-    // Handle end of queue based on repeat mode
-    if (nextIndex >= state.queue.length) {
-      if (state.repeat === 'all') {
+    let nextIndex = s.currentIndex + 1;
+
+    if (nextIndex >= s.queue.length) {
+      if (s.repeat === 'all') {
         nextIndex = 0;
-      } else if (state.repeat === 'one') {
-        // Restart current track
-        await player?.seekTo(0);
-        await player?.play();
-        return;
       } else {
-        // Stop playback at end of queue
         setState(prev => ({ ...prev, isPlaying: false }));
+        if (player) {
+          try {
+            await player.pause();
+            await player.seekTo(0);
+          } catch (_e) {}
+        }
         return;
       }
     }
 
-    const nextTrack = state.queue[nextIndex];
+    const nextTrack = s.queue[nextIndex];
     if (nextTrack) {
+      shouldAutoPlayRef.current = true;
+      trackFinishedRef.current = false;
       setState(prev => ({
         ...prev,
         currentTrack: nextTrack,
         currentIndex: nextIndex,
         isLoading: true,
+        position: 0,
+        duration: 0,
       }));
     }
-  }, [state.queue, state.currentIndex, state.repeat, player]);
+  }, [player]);
 
-  /**
-   * Go to the previous track
-   */
   const previous = useCallback(async () => {
-    // If more than 3 seconds into track, restart it
-    if (state.position > 3000) {
-      await player?.seekTo(0);
+    const s = stateRef.current;
+
+    if (s.position > 3000) {
+      if (player) {
+        try { await player.seekTo(0); } catch (_e) {}
+      }
+      setState(prev => ({ ...prev, position: 0 }));
       return;
     }
 
-    if (state.queue.length === 0) return;
+    if (s.queue.length === 0) return;
 
-    let prevIndex = state.currentIndex - 1;
+    let prevIndex = s.currentIndex - 1;
 
-    // Handle beginning of queue
     if (prevIndex < 0) {
-      if (state.repeat === 'all') {
-        prevIndex = state.queue.length - 1;
+      if (s.repeat === 'all') {
+        prevIndex = s.queue.length - 1;
       } else {
-        // Restart first track
-        await player?.seekTo(0);
+        if (player) {
+          try { await player.seekTo(0); } catch (_e) {}
+        }
+        setState(prev => ({ ...prev, position: 0 }));
         return;
       }
     }
 
-    const prevTrack = state.queue[prevIndex];
+    const prevTrack = s.queue[prevIndex];
     if (prevTrack) {
+      shouldAutoPlayRef.current = true;
+      trackFinishedRef.current = false;
       setState(prev => ({
         ...prev,
         currentTrack: prevTrack,
         currentIndex: prevIndex,
         isLoading: true,
+        position: 0,
+        duration: 0,
       }));
     }
-  }, [state.queue, state.currentIndex, state.position, state.repeat, player]);
+  }, [player]);
 
-  /**
-   * Seek to a position in the current track
-   * @param position - Position in milliseconds
-   */
-  const seek = useCallback(async (position: number) => {
+  const seek = useCallback(async (positionMs: number) => {
     if (player) {
-      await player.seekTo(position / 1000); // Convert to seconds
+      try {
+        const dur = stateRef.current.duration > 0 ? stateRef.current.duration : (player.duration * 1000);
+        const validPosition = Math.max(0, dur > 0 ? Math.min(positionMs, dur) : positionMs);
+        const positionSeconds = validPosition / 1000;
+
+        if (!isFinite(positionSeconds) || isNaN(positionSeconds) || positionSeconds < 0) {
+          return;
+        }
+
+        await player.seekTo(positionSeconds);
+        setState(prev => ({ ...prev, position: validPosition }));
+      } catch (_e) {}
     }
   }, [player]);
 
-  /**
-   * Set the volume level
-   * @param volume - Volume level (0.0 to 1.0)
-   */
   const setVolume = useCallback(async (volume: number) => {
     if (player) {
-      player.volume = Math.max(0, Math.min(1, volume));
-      setState(prev => ({ ...prev, volume }));
+      try {
+        const newVolume = Math.max(0, Math.min(1, volume));
+        player.volume = newVolume;
+        setState(prev => ({ ...prev, volume: newVolume }));
+      } catch (_e) {}
     }
   }, [player]);
 
-  /**
-   * Toggle shuffle mode on/off
-   */
   const toggleShuffle = useCallback(() => {
     setState(prev => {
       const newShuffle = !prev.shuffle;
-      
+
       if (newShuffle) {
-        // Enable shuffle: shuffle queue keeping current track in place
         const currentTrack = prev.currentTrack;
         const otherTracks = prev.queue.filter(t => t.id !== currentTrack?.id);
         const shuffledOthers = shuffleArray(otherTracks);
-        const newQueue = currentTrack 
-          ? [currentTrack, ...shuffledOthers] 
+        const newQueue = currentTrack
+          ? [currentTrack, ...shuffledOthers]
           : shuffledOthers;
-        
+
         return {
           ...prev,
           shuffle: true,
@@ -277,13 +325,12 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
           currentIndex: 0,
         };
       } else {
-        // Disable shuffle: restore original order
         const currentTrack = prev.currentTrack;
         const newQueue = originalQueueRef.current;
-        const newIndex = currentTrack 
-          ? newQueue.findIndex(t => t.id === currentTrack.id) 
+        const newIndex = currentTrack
+          ? newQueue.findIndex(t => t.id === currentTrack.id)
           : 0;
-        
+
         return {
           ...prev,
           shuffle: false,
@@ -294,9 +341,6 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     });
   }, []);
 
-  /**
-   * Cycle through repeat modes: off -> all -> one -> off
-   */
   const toggleRepeat = useCallback(() => {
     setState(prev => {
       const modes: RepeatMode[] = ['off', 'all', 'one'];
@@ -306,58 +350,64 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     });
   }, []);
 
-  /**
-   * Add tracks to the end of the queue
-   * @param tracks - Tracks to add
-   */
   const addToQueue = useCallback((tracks: Track[]) => {
     setState(prev => ({
       ...prev,
       queue: [...prev.queue, ...tracks],
     }));
-    // Also update original queue
     originalQueueRef.current = [...originalQueueRef.current, ...tracks];
   }, []);
 
-  /**
-   * Clear the queue and stop playback
-   */
-  const clearQueue = useCallback(() => {
-    player?.pause();
-    setState(defaultPlayerState);
+  const clearQueue = useCallback(async () => {
+    if (player) {
+      try { await player.pause(); } catch (_e) {}
+    }
+    setState(createDefaultPlayerState());
     originalQueueRef.current = [];
   }, [player]);
 
-  // =============================================================================
-  // Handle Track End
-  // =============================================================================
+  const didJustFinish = status?.didJustFinish ?? false;
 
   useEffect(() => {
-    if (status && status.didJustFinish) {
-      // Track finished playing, go to next
-      next();
-    }
-  }, [status, next]);
-
-  // =============================================================================
-  // Auto-play when track changes
-  // =============================================================================
+    if (!didJustFinish || trackFinishedRef.current) return;
+    trackFinishedRef.current = true;
+    next();
+  }, [didJustFinish, next]);
 
   useEffect(() => {
-    if (state.currentTrack && player && !state.isPlaying && state.isLoading) {
-      // Small delay to ensure player is ready
-      const timeout = setTimeout(() => {
-        player.play();
-      }, 100);
-      return () => clearTimeout(timeout);
+    if (state.currentTrack && player) {
+      const generation = ++autoplayGenerationRef.current;
+      let cancelled = false;
+      let retryCount = 0;
+
+      const tryAutoPlay = async () => {
+        if (!shouldAutoPlayRef.current || cancelled || autoplayGenerationRef.current !== generation) return;
+
+        const delay = AUTOPLAY_BASE_DELAY * Math.pow(1.5, retryCount);
+        await new Promise(resolve => setTimeout(resolve, delay));
+
+        if (cancelled || autoplayGenerationRef.current !== generation) return;
+
+        try {
+          await player.play();
+          shouldAutoPlayRef.current = false;
+        } catch (_e) {
+          retryCount++;
+          if (retryCount < MAX_AUTOPLAY_RETRIES && !cancelled && autoplayGenerationRef.current === generation) {
+            tryAutoPlay();
+          }
+        }
+      };
+
+      tryAutoPlay();
+
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [state.currentTrack, player, state.isPlaying, state.isLoading]);
+  }, [state.currentTrack?.id, player]);
 
-  // =============================================================================
-  // Context Value
-  // =============================================================================
-
-  const controls: PlayerControls = {
+  const controls: PlayerControls = useMemo(() => ({
     play,
     pause,
     togglePlayPause,
@@ -370,12 +420,12 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     playTrack,
     addToQueue,
     clearQueue,
-  };
+  }), [play, pause, togglePlayPause, next, previous, seek, setVolume, toggleShuffle, toggleRepeat, playTrack, addToQueue, clearQueue]);
 
-  const contextValue: PlayerContextValue = {
+  const contextValue: PlayerContextValue = useMemo(() => ({
     state,
     controls,
-  };
+  }), [state, controls]);
 
   return (
     <PlayerContext.Provider value={contextValue}>
@@ -384,22 +434,13 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
   );
 }
 
-// =============================================================================
-// Hook
-// =============================================================================
-
-/**
- * Hook to access the player context
- * @throws Error if used outside of PlayerProvider
- * @returns PlayerContextValue with state and controls
- */
 export function usePlayer(): PlayerContextValue {
   const context = useContext(PlayerContext);
-  
+
   if (context === undefined) {
     throw new Error('usePlayer must be used within a PlayerProvider');
   }
-  
+
   return context;
 }
 

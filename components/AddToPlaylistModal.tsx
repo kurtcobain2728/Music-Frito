@@ -1,9 +1,4 @@
-/**
- * AddToPlaylistModal Component
- * Modal to add a track to an existing playlist
- */
-
-import React, { memo } from 'react';
+import React, { memo, useCallback, useState } from 'react';
 import { 
   View, 
   Text, 
@@ -13,15 +8,13 @@ import {
   FlatList,
   Image,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors, Typography, Spacing, BorderRadius } from '@/constants/theme';
+import { Typography, Spacing, BorderRadius } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useFavorites } from '@/contexts/FavoritesContext';
 import type { Track, Playlist } from '@/types/audio';
-
-// =============================================================================
-// Types
-// =============================================================================
 
 interface AddToPlaylistModalProps {
   visible: boolean;
@@ -29,61 +22,61 @@ interface AddToPlaylistModalProps {
   onClose: () => void;
 }
 
-// =============================================================================
-// Playlist Item Component
-// =============================================================================
-
 interface PlaylistItemProps {
   playlist: Playlist;
   onPress: () => void;
+  colors: ReturnType<typeof useTheme>['theme']['colors'];
 }
 
-function PlaylistItem({ playlist, onPress }: PlaylistItemProps) {
+function PlaylistItem({ playlist, onPress, colors }: PlaylistItemProps) {
   return (
     <TouchableOpacity style={styles.playlistItem} onPress={onPress}>
-      {/* Artwork */}
       <View style={styles.playlistArtwork}>
         {playlist.artwork ? (
           <Image source={{ uri: playlist.artwork }} style={styles.artwork} />
         ) : (
           <LinearGradient
-            colors={[Colors.primary + '60', Colors.primary + '30']}
+            colors={[colors.primary + '60', colors.primary + '30']}
             style={styles.artworkPlaceholder}
           >
-            <Ionicons name="musical-notes" size={20} color={Colors.primary} />
+            <Ionicons name="musical-notes" size={20} color={colors.primary} />
           </LinearGradient>
         )}
       </View>
       
-      {/* Info */}
       <View style={styles.playlistInfo}>
-        <Text style={styles.playlistName} numberOfLines={1}>{playlist.name}</Text>
-        <Text style={styles.playlistTracks}>{playlist.trackCount} canciones</Text>
+        <Text style={[styles.playlistName, { color: colors.textPrimary }]} numberOfLines={1}>{playlist.name}</Text>
+        <Text style={[styles.playlistTracks, { color: colors.textSecondary }]}>{playlist.trackCount} canciones</Text>
       </View>
       
-      <Ionicons name="add-circle-outline" size={24} color={Colors.primary} />
+      <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
     </TouchableOpacity>
   );
 }
 
-// =============================================================================
-// Component
-// =============================================================================
-
 function AddToPlaylistModalComponent({ visible, track, onClose }: AddToPlaylistModalProps) {
   const { playlists, addToPlaylist } = useFavorites();
+  const { theme } = useTheme();
+  const c = theme.colors;
+  const insets = useSafeAreaInsets();
+  const [isAdding, setIsAdding] = useState(false);
 
-  const handleAddToPlaylist = async (playlistId: string) => {
-    if (track) {
-      await addToPlaylist(playlistId, [track]);
+  const handleAddToPlaylist = useCallback(async (playlistId: string) => {
+    if (!track || isAdding) return;
+    setIsAdding(true);
+    try {
+      addToPlaylist(playlistId, [track]);
       onClose();
+    } finally {
+      setIsAdding(false);
     }
-  };
+  }, [track, isAdding, addToPlaylist, onClose]);
 
   const renderPlaylist = ({ item }: { item: Playlist }) => (
     <PlaylistItem 
       playlist={item} 
-      onPress={() => handleAddToPlaylist(item.id)} 
+      onPress={() => handleAddToPlaylist(item.id)}
+      colors={c}
     />
   );
 
@@ -101,19 +94,16 @@ function AddToPlaylistModalComponent({ visible, track, onClose }: AddToPlaylistM
           onPress={onClose}
         />
         
-        <View style={styles.container}>
-          {/* Handle */}
-          <View style={styles.handle} />
+        <View style={[styles.container, { backgroundColor: c.backgroundElevated, paddingBottom: insets.bottom + 20 }]}>
+          <View style={[styles.handle, { backgroundColor: c.surfaceBorder }]} />
           
-          {/* Header */}
-          <View style={styles.header}>
-            <Text style={styles.title}>Agregar a lista</Text>
+          <View style={[styles.header, { borderBottomColor: c.surfaceBorder }]}>
+            <Text style={[styles.title, { color: c.textPrimary }]}>Agregar a lista</Text>
             {track && (
-              <Text style={styles.trackName} numberOfLines={1}>{track.title}</Text>
+              <Text style={[styles.trackName, { color: c.textSecondary }]} numberOfLines={1}>{track.title}</Text>
             )}
           </View>
 
-          {/* Playlists */}
           {playlists.length > 0 ? (
             <FlatList
               data={playlists}
@@ -124,9 +114,9 @@ function AddToPlaylistModalComponent({ visible, track, onClose }: AddToPlaylistM
             />
           ) : (
             <View style={styles.emptyState}>
-              <Ionicons name="list-outline" size={48} color={Colors.textMuted} />
-              <Text style={styles.emptyText}>No tienes listas de reproducción</Text>
-              <Text style={styles.emptySubtext}>Crea una desde la sección "Más"</Text>
+              <Ionicons name="list-outline" size={48} color={c.textMuted} />
+              <Text style={[styles.emptyText, { color: c.textSecondary }]}>No tienes listas de reproducción</Text>
+              <Text style={[styles.emptySubtext, { color: c.textMuted }]}>Crea una desde la sección "Más"</Text>
             </View>
           )}
         </View>
@@ -134,10 +124,6 @@ function AddToPlaylistModalComponent({ visible, track, onClose }: AddToPlaylistM
     </Modal>
   );
 }
-
-// =============================================================================
-// Styles
-// =============================================================================
 
 const styles = StyleSheet.create({
   overlay: {
@@ -149,49 +135,36 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
   container: {
-    backgroundColor: Colors.backgroundElevated,
     borderTopLeftRadius: BorderRadius.xl,
     borderTopRightRadius: BorderRadius.xl,
-    maxHeight: '70%',
-    paddingBottom: 34, // Safe area
+    maxHeight: '50%',
+    paddingBottom: 20,
   },
-  
-  // Handle
   handle: {
     width: 40,
     height: 4,
-    backgroundColor: Colors.surfaceBorder,
     borderRadius: 2,
     alignSelf: 'center',
     marginTop: Spacing.md,
     marginBottom: Spacing.base,
   },
-  
-  // Header
   header: {
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.base,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.surfaceBorder,
   },
   title: {
     fontSize: Typography.fontSize.lg,
     fontWeight: Typography.fontWeight.bold,
-    color: Colors.textPrimary,
     marginBottom: Spacing.xs,
   },
   trackName: {
     fontSize: Typography.fontSize.sm,
-    color: Colors.textSecondary,
   },
-  
-  // List
   list: {
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
   },
-  
-  // Playlist item
   playlistItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -220,15 +193,11 @@ const styles = StyleSheet.create({
   playlistName: {
     fontSize: Typography.fontSize.base,
     fontWeight: Typography.fontWeight.medium,
-    color: Colors.textPrimary,
     marginBottom: 2,
   },
   playlistTracks: {
     fontSize: Typography.fontSize.sm,
-    color: Colors.textSecondary,
   },
-  
-  // Empty state
   emptyState: {
     alignItems: 'center',
     paddingVertical: Spacing['3xl'],
@@ -236,19 +205,13 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: Typography.fontSize.base,
-    color: Colors.textSecondary,
     marginTop: Spacing.base,
   },
   emptySubtext: {
     fontSize: Typography.fontSize.sm,
-    color: Colors.textMuted,
     marginTop: Spacing.xs,
   },
 });
-
-// =============================================================================
-// Export
-// =============================================================================
 
 export const AddToPlaylistModal = memo(AddToPlaylistModalComponent);
 export default AddToPlaylistModal;

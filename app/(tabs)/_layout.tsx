@@ -1,20 +1,10 @@
-/**
- * Tabs Layout
- * Bottom tab navigation with Home, Library, Search, More icons
- * Adapted for both gesture and button navigation modes
- */
-
-import React from 'react';
-import { Tabs } from 'expo-router';
-import { View, StyleSheet, Platform } from 'react-native';
+import { Layout } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Ionicons } from '@expo/vector-icons';
+import { Tabs } from 'expo-router';
+import React from 'react';
+import { Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Colors, Layout, Shadows } from '@/constants/theme';
-import { MiniPlayer } from '@/components/MiniPlayer';
-
-// =============================================================================
-// Tab Bar Icon Component
-// =============================================================================
 
 interface TabBarIconProps {
   name: keyof typeof Ionicons.glyphMap;
@@ -24,51 +14,41 @@ interface TabBarIconProps {
 
 function TabBarIcon({ name, color, focused }: TabBarIconProps) {
   return (
-    <Ionicons 
-      name={focused ? name : `${name}-outline` as keyof typeof Ionicons.glyphMap} 
-      size={22} 
-      color={color} 
+    <Ionicons
+      name={focused ? name : `${name}-outline` as keyof typeof Ionicons.glyphMap}
+      size={22}
+      color={color}
     />
   );
 }
 
-// =============================================================================
-// Tabs Layout Component
-// =============================================================================
-
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
-  
-  // Calculate tab bar height including safe area for button navigation
-  const tabBarHeight = Layout.tabBarHeight + (Platform.OS === 'android' ? insets.bottom : 0);
+  const { theme } = useTheme();
+  const c = theme.colors;
+
+  const tabBarHeight = Layout.tabBarHeight + (Platform.OS === 'android' ? Math.max(insets.bottom, 8) : insets.bottom);
 
   return (
-    <View style={styles.container}>
-      {/* Tab Navigator */}
+    <View style={[styles.container, { backgroundColor: c.background }]}>
       <Tabs
         screenOptions={{
-          // Header styling
           headerShown: false,
-          
-          // Tab bar styling
-          tabBarActiveTintColor: Colors.textPrimary,
-          tabBarInactiveTintColor: Colors.textMuted,
+          tabBarActiveTintColor: c.textPrimary,
+          tabBarInactiveTintColor: c.textMuted,
           tabBarStyle: [
-            styles.tabBar, 
-            { 
+            styles.tabBar,
+            {
               height: tabBarHeight,
-              paddingBottom: Platform.OS === 'android' ? Math.max(insets.bottom, 8) : 8,
+              paddingBottom: Platform.OS === 'android' ? Math.max(insets.bottom, 8) : insets.bottom,
             }
           ],
           tabBarLabelStyle: styles.tabBarLabel,
-          
-          // Background
           tabBarBackground: () => (
-            <View style={styles.tabBarBackground} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: c.background }]} />
           ),
         }}
       >
-        {/* Home Tab */}
         <Tabs.Screen
           name="index"
           options={{
@@ -78,8 +58,6 @@ export default function TabLayout() {
             ),
           }}
         />
-        
-        {/* Library Tab */}
         <Tabs.Screen
           name="library"
           options={{
@@ -89,8 +67,6 @@ export default function TabLayout() {
             ),
           }}
         />
-        
-        {/* Search Tab */}
         <Tabs.Screen
           name="search"
           options={{
@@ -100,8 +76,6 @@ export default function TabLayout() {
             ),
           }}
         />
-        
-        {/* More Tab */}
         <Tabs.Screen
           name="more"
           options={{
@@ -112,36 +86,23 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
-      
-      {/* Mini Player - Fixed at bottom above tab bar */}
-      <MiniPlayer />
     </View>
   );
 }
 
-// =============================================================================
-// Styles
-// =============================================================================
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
   tabBar: {
     backgroundColor: 'transparent',
     borderTopWidth: 0,
     elevation: 0,
-    paddingTop: 6,
-  },
-  tabBarBackground: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: Colors.background,
-    opacity: 0.98,
+    paddingTop: 8,
   },
   tabBarLabel: {
     fontSize: 10,
-    fontWeight: '500',
+    fontWeight: '600',
+    marginTop: 2,
   },
 });
-

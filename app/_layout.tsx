@@ -1,164 +1,159 @@
-/**
- * Root Layout
- * Sets up the main navigation structure and global providers
- */
-
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, ThemeProvider as NavThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
-import { PlayerProvider } from '@/contexts/PlayerContext';
+import { PlayerProvider, usePlayer } from '@/contexts/PlayerContext';
 import { FavoritesProvider } from '@/contexts/FavoritesContext';
-import { Colors } from '@/constants/theme';
+import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
+import { EqualizerProvider, useEqualizer } from '@/contexts/EqualizerContext';
+import { LyricsProvider } from '@/contexts/LyricsContext';
+import { OnboardingProvider, useOnboarding } from '@/contexts/OnboardingContext';
+import { SetupScreen } from '@/components/SetupScreen';
 
-// Export error boundary from expo-router
 export { ErrorBoundary } from 'expo-router';
 
-// =============================================================================
-// Configuration
-// =============================================================================
-
-/**
- * Configure initial route settings
- */
 export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
 
-// Prevent splash screen from auto-hiding
 SplashScreen.preventAutoHideAsync();
 
-// =============================================================================
-// Custom Dark Theme
-// =============================================================================
-
 /**
- * Custom dark theme matching our Spotify-inspired design
+ * Bridge component that watches for track changes and
+ * reattaches the equalizer to the new audio session.
+ * Must be rendered inside both PlayerProvider and EqualizerProvider.
  */
-const MusicPlayerTheme = {
-  ...DarkTheme,
-  colors: {
-    ...DarkTheme.colors,
-    primary: Colors.primary,
-    background: Colors.background,
-    card: Colors.backgroundElevated,
-    text: Colors.textPrimary,
-    border: Colors.surfaceBorder,
-    notification: Colors.primary,
-  },
-};
+function EqualizerBridge() {
+  const { state: playerState } = usePlayer();
+  const { reattachEqualizer, state: eqState } = useEqualizer();
+  const prevTrackIdRef = useRef<string | null>(null);
 
-// =============================================================================
-// Root Layout Component
-// =============================================================================
+  useEffect(() => {
+    const currentId = playerState.currentTrack?.id ?? null;
+    if (currentId && currentId !== prevTrackIdRef.current && eqState.initialized) {
+      prevTrackIdRef.current = currentId;
+      // Wait for audio session to start before reattaching
+      const timer = setTimeout(() => {
+        reattachEqualizer();
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [playerState.currentTrack?.id, eqState.initialized, reattachEqualizer]);
+
+  return null;
+}
+
+function OnboardingGate({ children }: { children: React.ReactNode }) {
+  const { state } = useOnboarding();
+  if (!state.isLoaded) return null;
+  if (!state.isSetupComplete) return <SetupScreen />;
+  return <>{children}</>;
+}
+
+function ThemedApp() {
+  const { theme } = useTheme();
+  const c = theme.colors;
+
+  const navTheme = theme.isDark ? {
+    ...DarkTheme,
+    colors: {
+      ...DarkTheme.colors,
+      primary: c.primary,
+      background: c.background,
+      card: c.backgroundElevated,
+      text: c.textPrimary,
+      border: c.surfaceBorder,
+      notification: c.primary,
+    },
+  } : {
+    ...DefaultTheme,
+    colors: {
+      ...DefaultTheme.colors,
+      primary: c.primary,
+      background: c.background,
+      card: c.backgroundElevated,
+      text: c.textPrimary,
+      border: c.border,
+      notification: c.primary,
+    },
+  };
+
+  return (
+    <NavThemeProvider value={navTheme}>
+      <OnboardingProvider>
+        <OnboardingGate>
+          <FavoritesProvider>
+            <PlayerProvider>
+              <EqualizerProvider>
+                <LyricsProvider>
+                <StatusBar style={theme.isDark ? 'light' : 'dark'} />
+                <EqualizerBridge />
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    contentStyle: { backgroundColor: c.background },
+                    animation: 'slide_from_bottom',
+                  }}
+                >
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen
+                    name="modal"
+                    options={{
+                      presentation: 'modal',
+                      animation: 'slide_from_bottom',
+                      gestureEnabled: true,
+                      gestureDirection: 'vertical',
+                    }}
+                  />
+                  <Stack.Screen name="folder/[id]" options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="favorites" options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="playlists" options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="playlist/[id]" options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="donations" options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="theme-settings" options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="equalizer" options={{ animation: 'slide_from_right' }} />
+                </Stack>
+                </LyricsProvider>
+              </EqualizerProvider>
+            </PlayerProvider>
+          </FavoritesProvider>
+        </OnboardingGate>
+      </OnboardingProvider>
+    </NavThemeProvider>
+  );
+}
 
 export default function RootLayout() {
-  // Load custom fonts
   const [loaded, error] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
     ...FontAwesome.font,
   });
 
-  // Handle font loading errors
   useEffect(() => {
     if (error) throw error;
   }, [error]);
 
-  // Hide splash screen once fonts are loaded
   useEffect(() => {
     if (loaded) {
-      SplashScreen.hideAsync();
+      SplashScreen.hideAsync().catch(() => {});
     }
   }, [loaded]);
 
-  // Show nothing while loading
   if (!loaded) {
     return null;
   }
 
-  return <RootLayoutNav />;
-}
-
-// =============================================================================
-// Navigation Layout
-// =============================================================================
-
-function RootLayoutNav() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider value={MusicPlayerTheme}>
-        <FavoritesProvider>
-          <PlayerProvider>
-            {/* Status bar configuration */}
-            <StatusBar style="light" />
-            
-            {/* Main navigation stack */}
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: Colors.background },
-                animation: 'slide_from_bottom',
-              }}
-            >
-              {/* Main tabs */}
-              <Stack.Screen 
-                name="(tabs)" 
-                options={{ headerShown: false }} 
-              />
-              
-              {/* Full player modal */}
-              <Stack.Screen 
-                name="modal" 
-                options={{ 
-                  presentation: 'modal',
-                  animation: 'slide_from_bottom',
-                  gestureEnabled: true,
-                  gestureDirection: 'vertical',
-                }} 
-              />
-              
-              {/* Folder detail screen */}
-              <Stack.Screen 
-                name="folder/[id]" 
-                options={{
-                  animation: 'slide_from_right',
-                }}
-              />
-              
-              {/* Favorites screen */}
-              <Stack.Screen 
-                name="favorites" 
-                options={{
-                  animation: 'slide_from_right',
-                }}
-              />
-              
-              {/* Playlists screen */}
-              <Stack.Screen 
-                name="playlists" 
-                options={{
-                  animation: 'slide_from_right',
-                }}
-              />
-              
-              {/* Playlist detail screen */}
-              <Stack.Screen 
-                name="playlist/[id]" 
-                options={{
-                  animation: 'slide_from_right',
-                }}
-              />
-            </Stack>
-          </PlayerProvider>
-        </FavoritesProvider>
+      <ThemeProvider>
+        <ThemedApp />
       </ThemeProvider>
     </GestureHandlerRootView>
   );
 }
-

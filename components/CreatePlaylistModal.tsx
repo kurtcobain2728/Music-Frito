@@ -1,8 +1,3 @@
-/**
- * CreatePlaylistModal Component
- * Modal to create a new playlist
- */
-
 import React, { useState, memo } from 'react';
 import { 
   View, 
@@ -15,11 +10,8 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors, Typography, Spacing, BorderRadius } from '@/constants/theme';
-
-// =============================================================================
-// Types
-// =============================================================================
+import { Typography, Spacing, BorderRadius } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface CreatePlaylistModalProps {
   visible: boolean;
@@ -27,12 +19,10 @@ interface CreatePlaylistModalProps {
   onCreate: (name: string) => void;
 }
 
-// =============================================================================
-// Component
-// =============================================================================
-
 function CreatePlaylistModalComponent({ visible, onClose, onCreate }: CreatePlaylistModalProps) {
   const [name, setName] = useState('');
+  const { theme } = useTheme();
+  const c = theme.colors;
 
   const handleCreate = () => {
     if (name.trim()) {
@@ -63,20 +53,18 @@ function CreatePlaylistModalComponent({ visible, onClose, onCreate }: CreatePlay
           onPress={handleClose}
         />
         
-        <View style={styles.container}>
-          {/* Header */}
+        <View style={[styles.container, { backgroundColor: c.backgroundElevated }]}>
           <View style={styles.header}>
-            <Text style={styles.title}>Nueva lista de reproducción</Text>
+            <Text style={[styles.title, { color: c.textPrimary }]}>Nueva lista de reproducción</Text>
             <TouchableOpacity onPress={handleClose}>
-              <Ionicons name="close" size={24} color={Colors.textSecondary} />
+              <Ionicons name="close" size={24} color={c.textSecondary} />
             </TouchableOpacity>
           </View>
 
-          {/* Input */}
           <TextInput
-            style={styles.input}
+            style={[styles.input, { backgroundColor: c.backgroundHighlight, color: c.textPrimary }]}
             placeholder="Nombre de la lista"
-            placeholderTextColor={Colors.textMuted}
+            placeholderTextColor={c.textMuted}
             value={name}
             onChangeText={setName}
             autoFocus
@@ -84,21 +72,28 @@ function CreatePlaylistModalComponent({ visible, onClose, onCreate }: CreatePlay
             onSubmitEditing={handleCreate}
           />
 
-          {/* Actions */}
           <View style={styles.actions}>
             <TouchableOpacity 
               style={styles.cancelButton}
               onPress={handleClose}
             >
-              <Text style={styles.cancelText}>Cancelar</Text>
+              <Text style={[styles.cancelText, { color: c.textSecondary }]}>Cancelar</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
-              style={[styles.createButton, !name.trim() && styles.createButtonDisabled]}
+              style={[
+                styles.createButton,
+                { backgroundColor: c.primary },
+                !name.trim() && { backgroundColor: c.backgroundHighlight },
+              ]}
               onPress={handleCreate}
               disabled={!name.trim()}
             >
-              <Text style={[styles.createText, !name.trim() && styles.createTextDisabled]}>
+              <Text style={[
+                styles.createText,
+                { color: c.background },
+                !name.trim() && { color: c.textMuted },
+              ]}>
                 Crear
               </Text>
             </TouchableOpacity>
@@ -108,10 +103,6 @@ function CreatePlaylistModalComponent({ visible, onClose, onCreate }: CreatePlay
     </Modal>
   );
 }
-
-// =============================================================================
-// Styles
-// =============================================================================
 
 const styles = StyleSheet.create({
   overlay: {
@@ -126,12 +117,9 @@ const styles = StyleSheet.create({
   container: {
     width: '85%',
     maxWidth: 400,
-    backgroundColor: Colors.backgroundElevated,
     borderRadius: BorderRadius.xl,
     padding: Spacing.lg,
   },
-  
-  // Header
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -141,21 +129,14 @@ const styles = StyleSheet.create({
   title: {
     fontSize: Typography.fontSize.lg,
     fontWeight: Typography.fontWeight.bold,
-    color: Colors.textPrimary,
   },
-  
-  // Input
   input: {
-    backgroundColor: Colors.backgroundHighlight,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.base,
     paddingVertical: Spacing.md,
     fontSize: Typography.fontSize.base,
-    color: Colors.textPrimary,
     marginBottom: Spacing.lg,
   },
-  
-  // Actions
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -167,30 +148,17 @@ const styles = StyleSheet.create({
   },
   cancelText: {
     fontSize: Typography.fontSize.base,
-    color: Colors.textSecondary,
   },
   createButton: {
-    backgroundColor: Colors.primary,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     borderRadius: BorderRadius.full,
   },
-  createButtonDisabled: {
-    backgroundColor: Colors.backgroundHighlight,
-  },
   createText: {
     fontSize: Typography.fontSize.base,
     fontWeight: Typography.fontWeight.semibold,
-    color: Colors.background,
-  },
-  createTextDisabled: {
-    color: Colors.textMuted,
   },
 });
-
-// =============================================================================
-// Export
-// =============================================================================
 
 export const CreatePlaylistModal = memo(CreatePlaylistModalComponent);
 export default CreatePlaylistModal;
