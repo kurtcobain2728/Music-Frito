@@ -4,28 +4,26 @@
     "slug": "music-player",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/Logo.png",
+    "icon": "./assets/images/logo.png",
     "scheme": "musicplayer",
     "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/images/Logo.png",
+      "image": "./assets/images/logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#121212"
     },
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSAppleMusicUsageDescription": "Esta app necesita acceso a tu librería de música para reproducir tus canciones.",
-        "UIBackgroundModes": [
-          "audio",
-          "audio"
-        ]
+        "NSAppleMusicUsageDescription": "Esta app necesita acceso a tu libreria de musica para reproducir tus canciones.",
+        "UIBackgroundModes": ["audio"]
       },
       "bundleIdentifier": "com.musicplayer.app"
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/Logo.png",
+        "foregroundImage": "./assets/images/logo.png",
+        "monochromeImage": "./assets/images/logo.png",
         "backgroundColor": "#121212"
       },
       "edgeToEdgeEnabled": true,
@@ -61,10 +59,10 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Esta app necesita acceso a tus fotos para mostrar carátulas de álbumes.",
+          "photosPermission": "Esta app necesita acceso a tus fotos para mostrar caratulas de albumes.",
           "savePhotosPermission": false,
           "isAccessMediaLocationEnabled": false,
-          "audioPermission": "Esta app necesita acceso a tus archivos de audio para reproducir tu música."
+          "audioPermission": "Esta app necesita acceso a tus archivos de audio para reproducir tu musica."
         }
       ]
     ],

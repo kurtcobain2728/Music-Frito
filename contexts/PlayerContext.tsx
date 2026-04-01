@@ -1,21 +1,17 @@
-import type {
-    PlayerControls,
-    PlayerState,
-    RepeatMode,
-    Track
-} from '@/types/audio';
+import type { PlayerControls, PlayerState, RepeatMode, Track } from '@/types/audio';
+import MediaServiceModule from '@/modules/media-service';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import React, {
-    createContext,
-    useCallback,
-    useContext,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-    type ReactNode
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
 } from 'react';
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, NativeEventEmitter, NativeModules } from 'react-native';
 
 interface PlayerContextValue {
   state: PlayerState;
@@ -52,30 +48,19 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
   const trackFinishedRef = useRef(false);
   const stateRef = useRef<PlayerState>(createDefaultPlayerState());
   const autoplayGenerationRef = useRef(0);
+  const serviceStartedRef = useRef(false);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
-  const player = useAudioPlayer(
-    state.currentTrack?.uri
-      ? { uri: state.currentTrack.uri }
-      : null
-  );
+  const player = useAudioPlayer(state.currentTrack?.uri ? { uri: state.currentTrack.uri } : null);
 
   const status = useAudioPlayerStatus(player);
 
   useEffect(() => {
     const setupAudio = async () => {
       try {
-        if (Platform.OS === 'android' && Platform.Version >= 33) {
-          try {
-            await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
-            );
-          } catch (_e) {}
-        }
-
         await setAudioModeAsync({
           playsInSilentMode: true,
           shouldPlayInBackground: true,
@@ -87,21 +72,92 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
   }, []);
 
   useEffect(() => {
-    if (state.currentTrack && player) {
-      try {
-        if ('setNowPlayingMetadata' in player) {
+    if (!MediaServiceModule) return;
+
+    let emitter: NativeEventEmitter | null = null;
+    const subscriptions: any[] = [];
+
+    try {
+      emitter = new NativeEventEmitter(NativeModules.MediaServiceModule || (MediaServiceModule as any));
+
+      subscriptions.push(
+        emitter.addListener('onRemotePlay', () => {
+          if (player && stateRef.current.currentTrack) {
+            try {
+              player.play();
+            } catch (_e) {}
+          }
+        }),
+        emitter.addListener('onRemotePause', () => {
+          if (player) {
+            try {
+              player.pause();
+            } catch (_e) {}
+          }
+        }),
+        emitter.addListener('onRemoteNext', () => {
+          nextRef.current();
+        }),
+        emitter.addListener('onRemotePrevious', () => {
+          previousRef.current();
+        }),
+        emitter.addListener('onRemoteSeek', (event: { position: number }) => {
+          if (player) {
+            try {
+              player.seekTo(event.position / 1000);
+            } catch (_e) {}
+          }
+        }),
+        emitter.addListener('onRemoteStop', () => {
+          if (player) {
+            try {
+              player.pause();
+            } catch (_e) {}
+          }
+        }),
+      );
+    } catch (_e) {}
+
+    return () => {
+      subscriptions.forEach(sub => {
+        try {
+          sub.remove();
+        } catch (_e) {}
+      });
+    };
+  }, [player]);
+
+  useEffect(() => {
+    const svc = MediaServiceModule;
+    if (state.currentTrack && svc) {
+      const startAndUpdate = async () => {
+        try {
+          if (!serviceStartedRef.current) {
+            if (Platform.OS === 'android' && Platform.Version >= 33) {
+              try {
+                await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+              } catch (_e) {}
+            }
+            await svc.startService();
+            serviceStartedRef.current = true;
+          }
           const track = state.currentTrack;
-          (player as any).setNowPlayingMetadata({
-            title: track.title,
-            artist: track.artist,
-            album: track.album,
-            artwork: track.artwork,
-            duration: track.duration / 1000,
-          });
-        }
+          if (track) {
+            svc.updateMetadata(track.title, track.artist, track.album, track.duration, track.uri || null);
+          }
+        } catch (_e) {}
+      };
+      startAndUpdate();
+    }
+  }, [state.currentTrack?.id]);
+
+  useEffect(() => {
+    if (MediaServiceModule) {
+      try {
+        MediaServiceModule.updatePlaybackState(state.isPlaying, state.position);
       } catch (_e) {}
     }
-  }, [state.currentTrack?.id, player]);
+  }, [state.isPlaying, Math.floor(state.position / 1000)]);
 
   useEffect(() => {
     if (status) {
@@ -175,9 +231,7 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
 
     setState(prev => {
       const finalQueue = prev.shuffle ? shuffleArray(newQueue) : newQueue;
-      const finalIndex = prev.shuffle
-        ? finalQueue.findIndex(t => t.id === track.id)
-        : (trackIndex >= 0 ? trackIndex : 0);
+      const finalIndex = prev.shuffle ? finalQueue.findIndex(t => t.id === track.id) : trackIndex >= 0 ? trackIndex : 0;
 
       return {
         ...prev,
@@ -242,7 +296,9 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
 
     if (s.position > 3000) {
       if (player) {
-        try { await player.seekTo(0); } catch (_e) {}
+        try {
+          await player.seekTo(0);
+        } catch (_e) {}
       }
       setState(prev => ({ ...prev, position: 0 }));
       return;
@@ -257,7 +313,9 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
         prevIndex = s.queue.length - 1;
       } else {
         if (player) {
-          try { await player.seekTo(0); } catch (_e) {}
+          try {
+            await player.seekTo(0);
+          } catch (_e) {}
         }
         setState(prev => ({ ...prev, position: 0 }));
         return;
@@ -279,32 +337,47 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     }
   }, [player]);
 
-  const seek = useCallback(async (positionMs: number) => {
-    if (player) {
-      try {
-        const dur = stateRef.current.duration > 0 ? stateRef.current.duration : (player.duration * 1000);
-        const validPosition = Math.max(0, dur > 0 ? Math.min(positionMs, dur) : positionMs);
-        const positionSeconds = validPosition / 1000;
+  const nextRef = useRef(next);
+  const previousRef = useRef(previous);
+  useEffect(() => {
+    nextRef.current = next;
+  }, [next]);
+  useEffect(() => {
+    previousRef.current = previous;
+  }, [previous]);
 
-        if (!isFinite(positionSeconds) || isNaN(positionSeconds) || positionSeconds < 0) {
-          return;
-        }
+  const seek = useCallback(
+    async (positionMs: number) => {
+      if (player) {
+        try {
+          const dur = stateRef.current.duration > 0 ? stateRef.current.duration : player.duration * 1000;
+          const validPosition = Math.max(0, dur > 0 ? Math.min(positionMs, dur) : positionMs);
+          const positionSeconds = validPosition / 1000;
 
-        await player.seekTo(positionSeconds);
-        setState(prev => ({ ...prev, position: validPosition }));
-      } catch (_e) {}
-    }
-  }, [player]);
+          if (!isFinite(positionSeconds) || isNaN(positionSeconds) || positionSeconds < 0) {
+            return;
+          }
 
-  const setVolume = useCallback(async (volume: number) => {
-    if (player) {
-      try {
-        const newVolume = Math.max(0, Math.min(1, volume));
-        player.volume = newVolume;
-        setState(prev => ({ ...prev, volume: newVolume }));
-      } catch (_e) {}
-    }
-  }, [player]);
+          await player.seekTo(positionSeconds);
+          setState(prev => ({ ...prev, position: validPosition }));
+        } catch (_e) {}
+      }
+    },
+    [player],
+  );
+
+  const setVolume = useCallback(
+    async (volume: number) => {
+      if (player) {
+        try {
+          const newVolume = Math.max(0, Math.min(1, volume));
+          player.volume = newVolume;
+          setState(prev => ({ ...prev, volume: newVolume }));
+        } catch (_e) {}
+      }
+    },
+    [player],
+  );
 
   const toggleShuffle = useCallback(() => {
     setState(prev => {
@@ -314,9 +387,7 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
         const currentTrack = prev.currentTrack;
         const otherTracks = prev.queue.filter(t => t.id !== currentTrack?.id);
         const shuffledOthers = shuffleArray(otherTracks);
-        const newQueue = currentTrack
-          ? [currentTrack, ...shuffledOthers]
-          : shuffledOthers;
+        const newQueue = currentTrack ? [currentTrack, ...shuffledOthers] : shuffledOthers;
 
         return {
           ...prev,
@@ -327,9 +398,7 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
       } else {
         const currentTrack = prev.currentTrack;
         const newQueue = originalQueueRef.current;
-        const newIndex = currentTrack
-          ? newQueue.findIndex(t => t.id === currentTrack.id)
-          : 0;
+        const newIndex = currentTrack ? newQueue.findIndex(t => t.id === currentTrack.id) : 0;
 
         return {
           ...prev,
@@ -360,7 +429,9 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
 
   const clearQueue = useCallback(async () => {
     if (player) {
-      try { await player.pause(); } catch (_e) {}
+      try {
+        await player.pause();
+      } catch (_e) {}
     }
     setState(createDefaultPlayerState());
     originalQueueRef.current = [];
@@ -407,31 +478,46 @@ export function PlayerProvider({ children }: PlayerProviderProps) {
     }
   }, [state.currentTrack?.id, player]);
 
-  const controls: PlayerControls = useMemo(() => ({
-    play,
-    pause,
-    togglePlayPause,
-    next,
-    previous,
-    seek,
-    setVolume,
-    toggleShuffle,
-    toggleRepeat,
-    playTrack,
-    addToQueue,
-    clearQueue,
-  }), [play, pause, togglePlayPause, next, previous, seek, setVolume, toggleShuffle, toggleRepeat, playTrack, addToQueue, clearQueue]);
-
-  const contextValue: PlayerContextValue = useMemo(() => ({
-    state,
-    controls,
-  }), [state, controls]);
-
-  return (
-    <PlayerContext.Provider value={contextValue}>
-      {children}
-    </PlayerContext.Provider>
+  const controls: PlayerControls = useMemo(
+    () => ({
+      play,
+      pause,
+      togglePlayPause,
+      next,
+      previous,
+      seek,
+      setVolume,
+      toggleShuffle,
+      toggleRepeat,
+      playTrack,
+      addToQueue,
+      clearQueue,
+    }),
+    [
+      play,
+      pause,
+      togglePlayPause,
+      next,
+      previous,
+      seek,
+      setVolume,
+      toggleShuffle,
+      toggleRepeat,
+      playTrack,
+      addToQueue,
+      clearQueue,
+    ],
   );
+
+  const contextValue: PlayerContextValue = useMemo(
+    () => ({
+      state,
+      controls,
+    }),
+    [state, controls],
+  );
+
+  return <PlayerContext.Provider value={contextValue}>{children}</PlayerContext.Provider>;
 }
 
 export function usePlayer(): PlayerContextValue {

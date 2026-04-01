@@ -1,0 +1,55 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.fritomusic.mediaservice" >
+4
+5    <uses-sdk android:minSdkVersion="24" />
+6
+7    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+7-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:3:5-77
+7-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:3:22-74
+8    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+8-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:4:5-92
+8-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:4:22-89
+9    <uses-permission android:name="android.permission.WAKE_LOCK" />
+9-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:5:5-68
+9-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:5:22-65
+10    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+10-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:6:5-77
+10-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:6:22-74
+11
+12    <application>
+12-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:8:5-26:19
+13        <service
+13-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:9:9-17:19
+14            android:name="com.fritomusic.mediaservice.MusicPlaybackService"
+14-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:10:13-49
+15            android:enabled="true"
+15-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:11:13-35
+16            android:exported="false"
+16-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:12:13-37
+17            android:foregroundServiceType="mediaPlayback" >
+17-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:13:13-58
+18            <intent-filter>
+18-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:14:13-16:29
+19                <action android:name="android.intent.action.MEDIA_BUTTON" />
+19-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:15:17-77
+19-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:15:25-74
+20            </intent-filter>
+21        </service>
+22
+23        <receiver
+23-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:19:9-25:20
+24            android:name="androidx.media.session.MediaButtonReceiver"
+24-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:20:13-70
+25            android:exported="true" >
+25-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:21:13-36
+26            <intent-filter>
+26-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:14:13-16:29
+27                <action android:name="android.intent.action.MEDIA_BUTTON" />
+27-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:15:17-77
+27-->/home/mikejlzp/Documentos/music frito goty/music-player/modules/media-service/android/src/main/AndroidManifest.xml:15:25-74
+28            </intent-filter>
+29        </receiver>
+30    </application>
+31
+32</manifest>

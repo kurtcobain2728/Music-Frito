@@ -1,39 +1,34 @@
 import { ArtworkPlaceholder } from '@/components/ArtworkPlaceholder';
-import { ExpressiveScrollBar } from '@/components/ExpressiveScrollBar';
 import { FolderIcon } from '@/components/FolderIcon';
+import { InteractiveScrollBar } from '@/components/InteractiveScrollBar';
 import { ScreenWithPlayer } from '@/components/ScreenWithPlayer';
+import { TrackItem } from '@/components/TrackItem';
 import { BorderRadius, Layout, Shadows, Spacing, Typography } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
 import { usePlayer } from '@/contexts/PlayerContext';
 import { useAudioLibrary } from '@/hooks/useAudioLibrary';
+import FileExplorerModule, { type DirectoryEntry, type FileEntry } from '@/modules/file-explorer';
 import type { Folder, Track } from '@/types/audio';
-import { formatDuration } from '@/utils/formatters';
+import { formatDuration, formatTrackCount } from '@/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { router } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    BackHandler,
-    FlatList,
-    Image,
-    Pressable,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  BackHandler,
+  FlatList,
+  Image,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-interface FileSystemNode {
-  type: 'folder' | 'track';
-  name: string;
-  path: string;
-  data?: Track;
-  trackCount?: number;
-  artwork?: string;
-  children?: string[];
-}
+type NativeListItem = { type: 'folder'; entry: DirectoryEntry } | { type: 'file'; entry: FileEntry; track?: Track };
 
 function getAudioFormat(filename: string): string {
   return (filename.split('.').pop()?.toLowerCase() || '').toUpperCase();
@@ -43,264 +38,324 @@ function isLosslessFormat(format: string): boolean {
   return ['FLAC', 'WAV', 'AIFF', 'APE', 'DFF', 'DSF'].includes(format);
 }
 
-/**
- * Well-known Android storage root paths.
- * We use these to avoid descending too deep into the tree.
- */
-const ANDROID_STORAGE_ROOTS = [
-  '/storage/emulated/0',
-  '/sdcard',
-  '/storage/sdcard0',
-  '/mnt/sdcard',
-];
-
-/**
- * Find a sensible root to show the user.
- * Instead of computing the deepest common ancestor (which often points to a single
- * band/album folder), we look for a well-known Android storage root in the paths.
- * If none found, we fall back to one level above the deepest common ancestor so that
- * at least the top-level music folders are visible.
- */
-function findStorageRoot(paths: string[]): string {
-  if (paths.length === 0) return '/storage/emulated/0';
-
-  // Check if all paths share a well-known root
-  for (const root of ANDROID_STORAGE_ROOTS) {
-    if (paths.every(p => p.startsWith(root))) {
-      return root;
-    }
-  }
-
-  // Fallback: compute common ancestor but stop one level higher than deepest common
-  if (paths.length === 1) {
-    // Single folder: go up two levels so the user can see the parent
-    const parts = paths[0].split('/').filter(Boolean);
-    if (parts.length > 2) {
-      parts.pop(); // remove folder itself
-      parts.pop(); // go one more up
-      return '/' + parts.join('/');
-    }
-    parts.pop();
-    return '/' + parts.join('/');
-  }
-
-  const splitPaths = paths.map(p => p.split('/').filter(Boolean));
-  const minLength = Math.min(...splitPaths.map(p => p.length));
-  const commonParts: string[] = [];
-  for (let i = 0; i < minLength; i++) {
-    const part = splitPaths[0][i];
-    if (splitPaths.every(p => p[i] === part)) commonParts.push(part);
-    else break;
-  }
-  return '/' + commonParts.join('/');
+function cleanTitle(filename: string): string {
+  const withoutExt = filename.replace(/\.[^.]+$/, '');
+  return withoutExt
+    .replace(/[_-]/g, ' ')
+    .split(' ')
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
 }
 
-function buildFileSystemTree(folders: Folder[], tracks: Track[]): Map<string, FileSystemNode[]> {
-  const tree = new Map<string, FileSystemNode[]>();
-  const allPaths = new Set<string>();
-  folders.forEach(f => allPaths.add(f.path));
-  const storageRoot = findStorageRoot(Array.from(allPaths));
-
-  // Collect all intermediate directories between the storage root and each music folder
-  const folderSet = new Set<string>();
-  folders.forEach(folder => {
-    folderSet.add(folder.path);
-    let currentPath = folder.path;
-    while (currentPath !== storageRoot && currentPath.length > storageRoot.length) {
-      const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-      if (parentPath.length >= storageRoot.length) folderSet.add(parentPath);
-      currentPath = parentPath;
-    }
-  });
-
-  // Create nodes for each folder
-  const folderNodes = new Map<string, FileSystemNode>();
-  folders.forEach(folder => {
-    folderNodes.set(folder.path, {
-      type: 'folder',
-      name: folder.name,
-      path: folder.path,
-      trackCount: folder.trackCount,
-      artwork: folder.artwork,
-    });
-  });
-
-  // Create intermediate folder nodes (directories that don't directly contain music)
-  folderSet.forEach(path => {
-    if (!folderNodes.has(path)) {
-      const name = path.split('/').filter(Boolean).pop() || 'Storage';
-      folderNodes.set(path, { type: 'folder', name, path, trackCount: 0 });
-    }
-  });
-
-  // Propagate track counts upward through intermediate directories
-  folders.forEach(folder => {
-    let currentPath = folder.path;
-    while (currentPath !== storageRoot && currentPath.length > storageRoot.length) {
-      const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-      if (parentPath.length >= storageRoot.length) {
-        const parentNode = folderNodes.get(parentPath);
-        if (parentNode) {
-          parentNode.trackCount = (parentNode.trackCount || 0) + folder.trackCount;
-          if (!parentNode.artwork && folder.artwork) parentNode.artwork = folder.artwork;
-        }
-      }
-      currentPath = parentPath;
-    }
-  });
-
-  // Build parent → children relationships
-  folderNodes.forEach((node, path) => {
-    const parentPath = path.substring(0, path.lastIndexOf('/')) || storageRoot;
-    if (path !== storageRoot) {
-      const siblings = tree.get(parentPath) || [];
-      siblings.push(node);
-      tree.set(parentPath, siblings);
-    }
-  });
-
-  // Add tracks to their parent folders
-  tracks.forEach(track => {
-    const siblings = tree.get(track.folderPath) || [];
-    siblings.push({ type: 'track', name: track.title, path: track.uri, data: track });
-    tree.set(track.folderPath, siblings);
-  });
-
-  // Sort: folders first, then tracks, alphabetically
-  tree.forEach((items) => {
-    items.sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-  });
-
-  return tree;
+function fileToTrack(file: FileEntry): Track {
+  const folderPath = file.folderPath || file.path.substring(0, file.path.lastIndexOf('/'));
+  const folderName = folderPath.split('/').filter(Boolean).pop() || 'Unknown';
+  return {
+    id: file.uri,
+    uri: file.uri,
+    title: cleanTitle(file.filename),
+    artist: 'Unknown Artist',
+    album: folderName,
+    duration: 0,
+    artwork: undefined,
+    folderPath,
+    filename: file.filename,
+    format: (file.extension as any) || 'unknown',
+    fileSize: file.size,
+    createdAt: file.lastModified,
+  };
 }
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { folders, tracks, isScanning, error, scanLibrary } = useAudioLibrary();
+  const {
+    tracks: libraryTracks,
+    folders: libraryFolders,
+    isScanning,
+    isLoaded: libraryLoaded,
+    scanLibrary,
+    getTracksForFolder,
+  } = useAudioLibrary();
   const { state, controls } = usePlayer();
   const { theme } = useTheme();
   const c = theme.colors;
-  const [currentPath, setCurrentPath] = useState<string | null>(null);
-  const [navigationHistory, setNavigationHistory] = useState<string[]>([]);
-  const [scrollState, setScrollState] = useState({ offset: 0, contentHeight: 0, visibleHeight: 0, isScrolling: false });
-  const scrollTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flatListRef = useRef<FlatList>(null);
 
-  const fileSystemTree = useMemo(() => buildFileSystemTree(folders, tracks), [folders, tracks]);
-  const rootPath = useMemo(() => findStorageRoot(folders.map(f => f.path)), [folders]);
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
+  const [rootPath, setRootPath] = useState('/storage/emulated/0');
+  const [navigationHistory, setNavigationHistory] = useState<string[]>([]);
+  const [nativeItems, setNativeItems] = useState<NativeListItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [useNativeExplorer, setUseNativeExplorer] = useState(false);
+  const [nativeReady, setNativeReady] = useState(false);
+  const [scrollState, setScrollState] = useState({ offset: 0, contentHeight: 0, visibleHeight: 0, isScrolling: false });
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const trackMapRef = useRef(new Map<string, Track>());
+
+  useEffect(() => {
+    if (libraryTracks.length === 0) return;
+    const map = new Map<string, Track>();
+    for (let i = 0; i < libraryTracks.length; i++) {
+      const t = libraryTracks[i];
+      map.set(t.uri, t);
+      const filePath = t.uri.replace('file://', '');
+      map.set(filePath, t);
+    }
+    trackMapRef.current = map;
+  }, [libraryTracks]);
+
+  const loadDirectory = useCallback(async (path: string) => {
+    if (!FileExplorerModule) return;
+    setIsLoading(true);
+    try {
+      const result = await FileExplorerModule.listDirectory(path);
+      const map = trackMapRef.current;
+      const listItems: NativeListItem[] = [];
+      result.folders.forEach((folder: DirectoryEntry) => {
+        listItems.push({ type: 'folder', entry: folder });
+      });
+      result.files.forEach((file: FileEntry) => {
+        const existing = map.get(file.uri) || map.get(file.path);
+        listItems.push({ type: 'file', entry: file, track: existing });
+      });
+      setNativeItems(listItems);
+    } catch (_e) {
+      setNativeItems([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const initDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (initDoneRef.current) return;
+    initDoneRef.current = true;
+
+    const init = async () => {
+      if (FileExplorerModule) {
+        try {
+          const hasPermission = await FileExplorerModule.hasStoragePermission();
+          if (hasPermission) {
+            const root = await FileExplorerModule.getStorageRoot();
+            setRootPath(root);
+            setUseNativeExplorer(true);
+            setNativeReady(true);
+            await loadDirectory(root);
+            return;
+          }
+        } catch (_e) {}
+      }
+      setUseNativeExplorer(false);
+      setNativeReady(true);
+      setIsLoading(false);
+    };
+    init();
+  }, [loadDirectory]);
+
+  useEffect(() => {
+    if (!useNativeExplorer || !nativeReady || !initDoneRef.current) return;
+    if (!currentPath) return;
+    loadDirectory(currentPath);
+  }, [currentPath, useNativeExplorer, nativeReady, loadDirectory]);
+
   const currentFolderName = useMemo(() => {
     if (!currentPath) return 'Almacenamiento';
     return currentPath.split('/').filter(Boolean).pop() || 'Almacenamiento';
   }, [currentPath]);
 
-  const displayItems = useMemo((): FileSystemNode[] => {
-    const key = currentPath || rootPath;
-    const items = fileSystemTree.get(key);
-    if (items && items.length > 0) return items;
-
-    // If at root and nothing found, try showing immediate children from the tree
-    if (!currentPath) {
-      // Gather all top-level entries from the tree that are direct children of rootPath
-      const rootChildren: FileSystemNode[] = [];
-      fileSystemTree.forEach((children, parentPath) => {
-        if (parentPath === rootPath) {
-          rootChildren.push(...children);
-        }
-      });
-      if (rootChildren.length > 0) return rootChildren;
-
-      // Last fallback: show all unique top-level folders
-      const topFolders = new Map<string, FileSystemNode>();
-      fileSystemTree.forEach((children) => {
-        children.forEach(child => {
-          if (child.type === 'folder' && !topFolders.has(child.path)) {
-            topFolders.set(child.path, child);
-          }
-        });
-      });
-      return Array.from(topFolders.values());
+  const currentFileTracks = useMemo(() => {
+    if (useNativeExplorer) {
+      return nativeItems
+        .filter((i): i is NativeListItem & { type: 'file' } => i.type === 'file')
+        .map(i => i.track || fileToTrack(i.entry));
     }
     return [];
-  }, [currentPath, rootPath, fileSystemTree]);
-
-  const currentFolderTracks = useMemo(
-    () => displayItems.filter(i => i.type === 'track' && i.data).map(i => i.data as Track),
-    [displayItems]
-  );
-
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (currentPath && currentPath !== rootPath) { handleBack(); return true; }
-      return false;
-    });
-    return () => sub.remove();
-  }, [currentPath, rootPath]);
-
-  const handleFolderPress = useCallback((node: FileSystemNode) => {
-    setNavigationHistory(prev => [...prev, currentPath || rootPath]);
-    setCurrentPath(node.path);
-  }, [currentPath, rootPath]);
-
-  const handleTrackPress = useCallback((track: Track) => {
-    controls.playTrack(track, currentFolderTracks);
-  }, [controls, currentFolderTracks]);
+  }, [nativeItems, useNativeExplorer]);
 
   const handleBack = useCallback(() => {
     const prev = navigationHistory[navigationHistory.length - 1];
     setNavigationHistory(p => p.slice(0, -1));
     setCurrentPath(prev === rootPath ? null : prev);
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, [navigationHistory, rootPath]);
 
-  const handlePlayAll = useCallback(() => {
-    if (currentFolderTracks.length > 0) controls.playTrack(currentFolderTracks[0], currentFolderTracks);
-  }, [controls, currentFolderTracks]);
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (useNativeExplorer && currentPath && currentPath !== rootPath) {
+        handleBack();
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [currentPath, rootPath, handleBack, useNativeExplorer]);
 
-  const renderItem = useCallback(({ item }: { item: FileSystemNode }) => {
-    if (item.type === 'folder') {
-      return (
-        <Pressable style={[styles.itemRow, { backgroundColor: c.backgroundElevated }]} onPress={() => handleFolderPress(item)}>
-          <View style={styles.itemIcon}><FolderIcon folderName={item.name} size={48} trackCount={item.trackCount} /></View>
-          <View style={styles.itemInfo}>
-            <Text style={[styles.itemTitle, { color: c.textPrimary }]} numberOfLines={1}>{item.name}</Text>
-            <Text style={[styles.itemSubtitle, { color: c.textSecondary }]} numberOfLines={1}>{item.trackCount} {item.trackCount === 1 ? 'canción' : 'canciones'}</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={c.textMuted} />
-        </Pressable>
-      );
-    } else if (item.data) {
-      const track = item.data;
-      const isCurrent = state.currentTrack?.id === track.id;
-      const isPlaying = state.isPlaying && isCurrent;
-      const format = getAudioFormat(track.filename);
+  const handleFolderPress = useCallback(
+    (folder: DirectoryEntry) => {
+      setNavigationHistory(prev => [...prev, currentPath || rootPath]);
+      setCurrentPath(folder.path);
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+    },
+    [currentPath, rootPath],
+  );
+
+  const handleLegacyFolderPress = useCallback((folder: Folder) => {
+    router.push({ pathname: '/folder/[id]', params: { id: folder.id } });
+  }, []);
+
+  const handleFilePress = useCallback(
+    (file: FileEntry, existingTrack?: Track) => {
+      const track = existingTrack || fileToTrack(file);
+      controls.playTrack(track, currentFileTracks);
+    },
+    [controls, currentFileTracks],
+  );
+
+  const handleLegacyTrackPress = useCallback(
+    (track: Track) => {
+      controls.playTrack(track, libraryTracks);
+    },
+    [controls, libraryTracks],
+  );
+
+  const handlePlayAll = useCallback(() => {
+    if (useNativeExplorer && currentFileTracks.length > 0) {
+      controls.playTrack(currentFileTracks[0], currentFileTracks);
+    }
+  }, [controls, currentFileTracks, useNativeExplorer]);
+
+  const handleRefresh = useCallback(async () => {
+    if (useNativeExplorer) {
+      await loadDirectory(currentPath || rootPath);
+    } else {
+      await scanLibrary();
+    }
+  }, [useNativeExplorer, loadDirectory, currentPath, rootPath, scanLibrary]);
+
+  const handleScroll = useCallback((e: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    setScrollState({
+      offset: contentOffset.y,
+      contentHeight: contentSize.height,
+      visibleHeight: layoutMeasurement.height,
+      isScrolling: true,
+    });
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = setTimeout(() => setScrollState(prev => ({ ...prev, isScrolling: false })), 150);
+  }, []);
+
+  const handleScrollBarDrag = useCallback((offset: number) => {
+    flatListRef.current?.scrollToOffset({ offset, animated: false });
+  }, []);
+
+  const renderNativeItem = useCallback(
+    ({ item }: { item: NativeListItem }) => {
+      if (item.type === 'folder') {
+        const folder = item.entry;
+        return (
+          <Pressable
+            style={[styles.itemRow, { backgroundColor: c.backgroundElevated }]}
+            onPress={() => handleFolderPress(folder)}
+          >
+            <View style={styles.itemIcon}>
+              <FolderIcon folderName={folder.name} size={48} trackCount={folder.audioCount} />
+            </View>
+            <View style={styles.itemInfo}>
+              <Text style={[styles.itemTitle, { color: c.textPrimary }]} numberOfLines={1}>
+                {folder.name}
+              </Text>
+              <Text style={[styles.itemSubtitle, { color: c.textSecondary }]} numberOfLines={1}>
+                {formatTrackCount(folder.audioCount)}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={c.textMuted} />
+          </Pressable>
+        );
+      }
+      const file = item.entry;
+      const track = item.track || fileToTrack(file);
+      const isCurrent = state.currentTrack?.id === track.id || state.currentTrack?.uri === track.uri;
+      const isPlayingCurrent = state.isPlaying && isCurrent;
+      const format = getAudioFormat(file.filename);
       const lossless = isLosslessFormat(format);
+
       return (
-        <Pressable style={[styles.itemRow, { backgroundColor: isCurrent ? c.backgroundHighlight : c.backgroundElevated }]} onPress={() => handleTrackPress(track)}>
+        <Pressable
+          style={[styles.itemRow, { backgroundColor: isCurrent ? c.backgroundHighlight : c.backgroundElevated }]}
+          onPress={() => handleFilePress(file, item.track)}
+        >
           <View style={styles.itemIcon}>
-            {track.artwork ? <Image source={{ uri: track.artwork }} style={styles.itemImage} /> : <ArtworkPlaceholder trackId={track.id} size={48} borderRadius={BorderRadius.sm} />}
-            {isPlaying && <View style={styles.playingOverlay}><Ionicons name="volume-high" size={16} color={c.primary} /></View>}
+            {track.artwork ? (
+              <Image source={{ uri: track.artwork }} style={styles.itemImage} />
+            ) : (
+              <ArtworkPlaceholder trackId={track.id} size={48} borderRadius={BorderRadius.sm} />
+            )}
+            {isPlayingCurrent && (
+              <View style={styles.playingOverlay}>
+                <Ionicons name="volume-high" size={16} color={c.primary} />
+              </View>
+            )}
           </View>
           <View style={styles.itemInfo}>
             <View style={styles.titleRow}>
-              <Text style={[styles.itemTitle, { color: isCurrent ? c.primary : c.textPrimary }]} numberOfLines={1}>{track.title}</Text>
+              <Text style={[styles.itemTitle, { color: isCurrent ? c.primary : c.textPrimary }]} numberOfLines={1}>
+                {track.title}
+              </Text>
               <View style={[styles.formatBadge, { backgroundColor: lossless ? c.primary : c.backgroundHighlight }]}>
                 <Text style={[styles.formatText, { color: lossless ? '#000' : c.textSecondary }]}>{format}</Text>
               </View>
             </View>
-            <Text style={[styles.itemSubtitle, { color: c.textSecondary }]} numberOfLines={1}>{track.artist} • {formatDuration(track.duration)}</Text>
+            <Text style={[styles.itemSubtitle, { color: c.textSecondary }]} numberOfLines={1}>
+              {track.artist}
+              {track.duration > 0 ? ` • ${formatDuration(track.duration)}` : ''}
+            </Text>
           </View>
         </Pressable>
       );
-    }
-    return null;
-  }, [handleFolderPress, handleTrackPress, state.currentTrack, state.isPlaying, c]);
+    },
+    [handleFolderPress, handleFilePress, state.currentTrack, state.isPlaying, c],
+  );
 
-  const keyExtractor = useCallback((item: FileSystemNode) => item.path, []);
-  const folderCount = displayItems.filter(i => i.type === 'folder').length;
-  const trackCount = displayItems.filter(i => i.type === 'track').length;
+  const renderLegacyFolderItem = useCallback(
+    ({ item }: { item: Folder }) => (
+      <Pressable
+        style={[styles.itemRow, { backgroundColor: c.backgroundElevated }]}
+        onPress={() => handleLegacyFolderPress(item)}
+      >
+        <View style={styles.itemIcon}>
+          <FolderIcon folderName={item.name} size={48} trackCount={item.trackCount} />
+        </View>
+        <View style={styles.itemInfo}>
+          <Text style={[styles.itemTitle, { color: c.textPrimary }]} numberOfLines={1}>
+            {item.name}
+          </Text>
+          <Text style={[styles.itemSubtitle, { color: c.textSecondary }]} numberOfLines={1}>
+            {formatTrackCount(item.trackCount)}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={c.textMuted} />
+      </Pressable>
+    ),
+    [c, handleLegacyFolderPress],
+  );
 
-  const renderHeader = () => {
+  const nativeKeyExtractor = useCallback((item: NativeListItem) => {
+    return item.type === 'folder' ? `f:${item.entry.path}` : `t:${item.entry.path}`;
+  }, []);
+
+  const legacyKeyExtractor = useCallback((item: Folder) => item.id, []);
+
+  const folderCount = useNativeExplorer ? nativeItems.filter(i => i.type === 'folder').length : 0;
+  const fileCount = useNativeExplorer ? nativeItems.filter(i => i.type === 'file').length : 0;
+
+  const hour = new Date().getHours();
+  let greeting = 'Buenas noches';
+  if (hour >= 5 && hour < 12) greeting = 'Buenos días';
+  else if (hour >= 12 && hour < 18) greeting = 'Buenas tardes';
+
+  const renderNativeHeader = () => {
     const isAtRoot = !currentPath || currentPath === rootPath;
     if (!isAtRoot) {
       return (
@@ -312,11 +367,11 @@ export default function HomeScreen() {
             <Text style={[styles.folderTitle, { color: c.textPrimary }]}>{currentFolderName}</Text>
             <Text style={[styles.folderSubtitle, { color: c.textSecondary }]}>
               {folderCount > 0 && `${folderCount} carpeta${folderCount !== 1 ? 's' : ''}`}
-              {folderCount > 0 && trackCount > 0 && ' • '}
-              {trackCount > 0 && `${trackCount} cancion${trackCount !== 1 ? 'es' : ''}`}
+              {folderCount > 0 && fileCount > 0 && ' • '}
+              {fileCount > 0 && `${fileCount} cancion${fileCount !== 1 ? 'es' : ''}`}
             </Text>
           </View>
-          {trackCount > 0 && (
+          {fileCount > 0 && (
             <TouchableOpacity onPress={handlePlayAll} style={[styles.headerPlayButton, { backgroundColor: c.primary }]}>
               <Ionicons name="play" size={20} color="#000" />
             </TouchableOpacity>
@@ -324,57 +379,124 @@ export default function HomeScreen() {
         </View>
       );
     }
-    const hour = new Date().getHours();
-    let greeting = 'Buenas noches';
-    if (hour >= 5 && hour < 12) greeting = 'Buenos días';
-    else if (hour >= 12 && hour < 18) greeting = 'Buenas tardes';
     return (
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <Text style={[styles.greeting, { color: c.textPrimary }]}>{greeting}</Text>
-          <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-            {folders.length > 0 ? `${tracks.length} canciones en ${folders.length} carpeta${folders.length !== 1 ? 's' : ''}` : 'Tu biblioteca de música'}
-          </Text>
+          <Text style={[styles.subtitle, { color: c.textSecondary }]}>Explorador de archivos</Text>
         </View>
       </View>
     );
   };
 
+  const renderLegacyHeader = () => (
+    <View style={styles.header}>
+      <View style={styles.headerContent}>
+        <Text style={[styles.greeting, { color: c.textPrimary }]}>{greeting}</Text>
+        <Text style={[styles.subtitle, { color: c.textSecondary }]}>
+          {libraryFolders.length} carpeta{libraryFolders.length !== 1 ? 's' : ''} • {libraryTracks.length} canciones
+        </Text>
+      </View>
+    </View>
+  );
+
+  const showLoading = useNativeExplorer ? isLoading : isScanning && !libraryLoaded;
+
   const renderEmptyState = () => {
-    if (isScanning) return <View style={styles.emptyState}><ActivityIndicator size="large" color={c.primary} /><Text style={[styles.emptyText, { color: c.textSecondary }]}>Escaneando tu música...</Text></View>;
-    if (error) return <View style={styles.emptyState}><Ionicons name="alert-circle" size={64} color={c.error} /><Text style={[styles.emptyText, { color: c.textSecondary }]}>{error}</Text></View>;
-    return <View style={styles.emptyState}><Ionicons name="folder-open" size={64} color={c.textMuted} /><Text style={[styles.emptyText, { color: c.textSecondary }]}>No se encontró música</Text></View>;
+    if (showLoading) {
+      return (
+        <View style={styles.emptyState}>
+          <ActivityIndicator size="large" color={c.primary} />
+          <Text style={[styles.emptyText, { color: c.textSecondary }]}>Escaneando...</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.emptyState}>
+        <Ionicons name="folder-open" size={64} color={c.textMuted} />
+        <Text style={[styles.emptyText, { color: c.textSecondary }]}>
+          {useNativeExplorer ? 'No se encontró música en esta carpeta' : 'No se encontró música'}
+        </Text>
+        <TouchableOpacity style={[styles.refreshButton, { backgroundColor: c.primary }]} onPress={handleRefresh}>
+          <Text style={[styles.refreshText, { color: '#000' }]}>Volver a escanear</Text>
+        </TouchableOpacity>
+      </View>
+    );
   };
+
+  if (useNativeExplorer) {
+    return (
+      <ScreenWithPlayer>
+        <View style={[styles.container, { paddingTop: insets.top, backgroundColor: c.background }]}>
+          <LinearGradient colors={[c.backgroundHighlight, c.background]} style={styles.gradient} />
+          <FlatList
+            ref={flatListRef}
+            data={nativeItems}
+            renderItem={renderNativeItem}
+            keyExtractor={nativeKeyExtractor}
+            ListHeaderComponent={renderNativeHeader}
+            ListEmptyComponent={renderEmptyState}
+            contentContainerStyle={[styles.listContent, nativeItems.length === 0 && styles.listContentEmpty]}
+            showsVerticalScrollIndicator={false}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={15}
+            windowSize={10}
+            refreshControl={
+              <RefreshControl
+                refreshing={isLoading}
+                onRefresh={handleRefresh}
+                tintColor={c.primary}
+                colors={[c.primary]}
+              />
+            }
+            onScroll={handleScroll}
+            scrollEventThrottle={16}
+          />
+          <InteractiveScrollBar
+            contentHeight={scrollState.contentHeight}
+            visibleHeight={scrollState.visibleHeight}
+            scrollOffset={scrollState.offset}
+            isScrolling={scrollState.isScrolling}
+            onDrag={handleScrollBarDrag}
+          />
+        </View>
+      </ScreenWithPlayer>
+    );
+  }
 
   return (
     <ScreenWithPlayer>
       <View style={[styles.container, { paddingTop: insets.top, backgroundColor: c.background }]}>
         <LinearGradient colors={[c.backgroundHighlight, c.background]} style={styles.gradient} />
         <FlatList
-          data={displayItems}
-          renderItem={renderItem}
-          keyExtractor={keyExtractor}
-          ListHeaderComponent={renderHeader}
+          ref={flatListRef}
+          data={libraryFolders}
+          renderItem={renderLegacyFolderItem}
+          keyExtractor={legacyKeyExtractor}
+          ListHeaderComponent={renderLegacyHeader}
           ListEmptyComponent={renderEmptyState}
-          contentContainerStyle={[styles.listContent, displayItems.length === 0 && styles.listContentEmpty]}
+          contentContainerStyle={[styles.listContent, libraryFolders.length === 0 && styles.listContentEmpty]}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews={true}
           maxToRenderPerBatch={15}
           windowSize={10}
-          refreshControl={<RefreshControl refreshing={isScanning} onRefresh={scanLibrary} tintColor={c.primary} colors={[c.primary]} />}
-          onScroll={(e) => {
-            const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-            setScrollState({ offset: contentOffset.y, contentHeight: contentSize.height, visibleHeight: layoutMeasurement.height, isScrolling: true });
-            if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-            scrollTimeoutRef.current = setTimeout(() => setScrollState(prev => ({ ...prev, isScrolling: false })), 150);
-          }}
+          refreshControl={
+            <RefreshControl
+              refreshing={isScanning}
+              onRefresh={scanLibrary}
+              tintColor={c.primary}
+              colors={[c.primary]}
+            />
+          }
+          onScroll={handleScroll}
           scrollEventThrottle={16}
         />
-        <ExpressiveScrollBar
+        <InteractiveScrollBar
           contentHeight={scrollState.contentHeight}
           visibleHeight={scrollState.visibleHeight}
           scrollOffset={scrollState.offset}
           isScrolling={scrollState.isScrolling}
+          onDrag={handleScrollBarDrag}
         />
       </View>
     </ScreenWithPlayer>
@@ -384,26 +506,79 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   gradient: { position: 'absolute', top: 0, left: 0, right: 0, height: 300 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.base, paddingTop: Spacing.lg, paddingBottom: Spacing.xl },
-  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xl,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: Spacing.md,
+  },
   headerContent: { flex: 1 },
   greeting: { fontSize: Typography.fontSize['3xl'], fontWeight: Typography.fontWeight.bold, marginBottom: Spacing.xs },
   subtitle: { fontSize: Typography.fontSize.md },
   folderTitle: { fontSize: Typography.fontSize['2xl'], fontWeight: Typography.fontWeight.bold, marginBottom: 2 },
   folderSubtitle: { fontSize: Typography.fontSize.sm },
-  headerPlayButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', ...Shadows.md },
+  headerPlayButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadows.md,
+  },
   listContent: { paddingHorizontal: Spacing.base, paddingBottom: Layout.screenPaddingBottom },
   listContentEmpty: { flex: 1 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.md, paddingHorizontal: Spacing.sm, borderRadius: BorderRadius.md, marginBottom: Spacing.sm },
-  itemIcon: { width: 48, height: 48, borderRadius: BorderRadius.sm, overflow: 'hidden', marginRight: Spacing.md, position: 'relative' },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.md,
+    marginBottom: Spacing.sm,
+  },
+  itemIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: BorderRadius.sm,
+    overflow: 'hidden',
+    marginRight: Spacing.md,
+    position: 'relative',
+  },
   itemImage: { width: '100%', height: '100%' },
-  playingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'center' },
+  playingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   itemInfo: { flex: 1 },
   titleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
   itemTitle: { fontSize: Typography.fontSize.base, fontWeight: Typography.fontWeight.semibold, flex: 1 },
   itemSubtitle: { fontSize: Typography.fontSize.sm },
   formatBadge: { marginLeft: Spacing.xs, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
   formatText: { fontSize: 9, fontWeight: '700' },
-  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xl, marginTop: 100 },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.xl,
+    marginTop: 100,
+  },
   emptyText: { fontSize: Typography.fontSize.base, textAlign: 'center', marginTop: Spacing.lg },
+  refreshButton: {
+    marginTop: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.full,
+  },
+  refreshText: { fontSize: Typography.fontSize.base, fontWeight: Typography.fontWeight.semibold },
 });

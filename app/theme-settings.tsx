@@ -3,14 +3,7 @@ import { useTheme, type ThemeMode, type AccentColor } from '@/contexts/ThemeCont
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import {
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
-} from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function ThemeSettingsScreen() {
@@ -23,7 +16,7 @@ export default function ThemeSettingsScreen() {
   const themeModes: { mode: ThemeMode; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
     { mode: 'dark', label: 'Oscuro', icon: 'moon' },
     { mode: 'light', label: 'Claro', icon: 'sunny' },
-    { mode: 'crystal', label: 'Cristal', icon: 'sparkles' },
+    { mode: 'adaptive', label: 'Adaptativa', icon: 'color-wand' },
     { mode: 'auto', label: 'Automático', icon: 'phone-portrait' },
   ];
 
@@ -141,13 +134,32 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, textAlign: 'center', fontSize: Typography.fontSize.lg, fontWeight: '700' },
   scrollContent: { padding: Spacing.base, paddingBottom: 100 },
   sectionTitle: { fontSize: Typography.fontSize.xl, fontWeight: '700', marginBottom: Spacing.md },
-  option: { flexDirection: 'row', alignItems: 'center', padding: Spacing.base, borderRadius: BorderRadius.lg, marginBottom: Spacing.sm },
+  option: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.base,
+    borderRadius: BorderRadius.lg,
+    marginBottom: Spacing.sm,
+  },
   optionLabel: { flex: 1, marginLeft: Spacing.md, fontSize: Typography.fontSize.md, fontWeight: '500' },
   colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   colorOption: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
   colorOptionSelected: { borderWidth: 3, borderColor: '#fff' },
-  customColorRow: { flexDirection: 'row', alignItems: 'center', padding: Spacing.md, borderRadius: BorderRadius.lg, marginTop: Spacing.md },
-  customInput: { flex: 1, borderWidth: 1, borderRadius: BorderRadius.md, padding: Spacing.sm, fontSize: Typography.fontSize.md, marginRight: Spacing.md },
+  customColorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    marginTop: Spacing.md,
+  },
+  customInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.sm,
+    fontSize: Typography.fontSize.md,
+    marginRight: Spacing.md,
+  },
   applyBtn: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, borderRadius: BorderRadius.md },
   applyText: { fontSize: Typography.fontSize.base, fontWeight: '600' },
   previewCard: { marginTop: Spacing.xl, padding: Spacing.lg, borderRadius: BorderRadius.lg, borderWidth: 1 },

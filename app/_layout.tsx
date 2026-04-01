@@ -15,6 +15,7 @@ import { EqualizerProvider, useEqualizer } from '@/contexts/EqualizerContext';
 import { LyricsProvider } from '@/contexts/LyricsContext';
 import { OnboardingProvider, useOnboarding } from '@/contexts/OnboardingContext';
 import { SetupScreen } from '@/components/SetupScreen';
+import { useAdaptivePalette } from '@/hooks/useAdaptivePalette';
 
 export { ErrorBoundary } from 'expo-router';
 
@@ -49,6 +50,11 @@ function EqualizerBridge() {
   return null;
 }
 
+function AdaptivePaletteBridge() {
+  useAdaptivePalette();
+  return null;
+}
+
 function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { state } = useOnboarding();
   if (!state.isLoaded) return null;
@@ -60,29 +66,31 @@ function ThemedApp() {
   const { theme } = useTheme();
   const c = theme.colors;
 
-  const navTheme = theme.isDark ? {
-    ...DarkTheme,
-    colors: {
-      ...DarkTheme.colors,
-      primary: c.primary,
-      background: c.background,
-      card: c.backgroundElevated,
-      text: c.textPrimary,
-      border: c.surfaceBorder,
-      notification: c.primary,
-    },
-  } : {
-    ...DefaultTheme,
-    colors: {
-      ...DefaultTheme.colors,
-      primary: c.primary,
-      background: c.background,
-      card: c.backgroundElevated,
-      text: c.textPrimary,
-      border: c.border,
-      notification: c.primary,
-    },
-  };
+  const navTheme = theme.isDark
+    ? {
+        ...DarkTheme,
+        colors: {
+          ...DarkTheme.colors,
+          primary: c.primary,
+          background: c.background,
+          card: c.backgroundElevated,
+          text: c.textPrimary,
+          border: c.surfaceBorder,
+          notification: c.primary,
+        },
+      }
+    : {
+        ...DefaultTheme,
+        colors: {
+          ...DefaultTheme.colors,
+          primary: c.primary,
+          background: c.background,
+          card: c.backgroundElevated,
+          text: c.textPrimary,
+          border: c.border,
+          notification: c.primary,
+        },
+      };
 
   return (
     <NavThemeProvider value={navTheme}>
@@ -92,33 +100,34 @@ function ThemedApp() {
             <PlayerProvider>
               <EqualizerProvider>
                 <LyricsProvider>
-                <StatusBar style={theme.isDark ? 'light' : 'dark'} />
-                <EqualizerBridge />
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    contentStyle: { backgroundColor: c.background },
-                    animation: 'slide_from_bottom',
-                  }}
-                >
-                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                  <Stack.Screen
-                    name="modal"
-                    options={{
-                      presentation: 'modal',
+                  <StatusBar style={theme.isDark ? 'light' : 'dark'} />
+                  <EqualizerBridge />
+                  <AdaptivePaletteBridge />
+                  <Stack
+                    screenOptions={{
+                      headerShown: false,
+                      contentStyle: { backgroundColor: c.background },
                       animation: 'slide_from_bottom',
-                      gestureEnabled: true,
-                      gestureDirection: 'vertical',
                     }}
-                  />
-                  <Stack.Screen name="folder/[id]" options={{ animation: 'slide_from_right' }} />
-                  <Stack.Screen name="favorites" options={{ animation: 'slide_from_right' }} />
-                  <Stack.Screen name="playlists" options={{ animation: 'slide_from_right' }} />
-                  <Stack.Screen name="playlist/[id]" options={{ animation: 'slide_from_right' }} />
-                  <Stack.Screen name="donations" options={{ animation: 'slide_from_right' }} />
-                  <Stack.Screen name="theme-settings" options={{ animation: 'slide_from_right' }} />
-                  <Stack.Screen name="equalizer" options={{ animation: 'slide_from_right' }} />
-                </Stack>
+                  >
+                    <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                    <Stack.Screen
+                      name="modal"
+                      options={{
+                        presentation: 'modal',
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
+                      }}
+                    />
+                    <Stack.Screen name="folder/[id]" options={{ animation: 'slide_from_right' }} />
+                    <Stack.Screen name="favorites" options={{ animation: 'slide_from_right' }} />
+                    <Stack.Screen name="playlists" options={{ animation: 'slide_from_right' }} />
+                    <Stack.Screen name="playlist/[id]" options={{ animation: 'slide_from_right' }} />
+                    <Stack.Screen name="donations" options={{ animation: 'slide_from_right' }} />
+                    <Stack.Screen name="theme-settings" options={{ animation: 'slide_from_right' }} />
+                    <Stack.Screen name="equalizer" options={{ animation: 'slide_from_right' }} />
+                  </Stack>
                 </LyricsProvider>
               </EqualizerProvider>
             </PlayerProvider>

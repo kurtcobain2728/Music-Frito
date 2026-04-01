@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Appearance, View, ActivityIndicator, StyleSheet } from 'react-native';
 
-export type ThemeMode = 'light' | 'dark' | 'crystal' | 'auto';
+export type ThemeMode = 'light' | 'dark' | 'adaptive' | 'auto';
 export type AccentColor = 'green' | 'blue' | 'purple' | 'pink' | 'orange' | 'red' | 'custom';
 
 export interface ThemeColors {
@@ -32,8 +32,6 @@ export interface ThemeColors {
   playerBackground: string;
   gradientStart: string;
   gradientEnd: string;
-  blurTint: 'light' | 'dark' | 'default';
-  blurIntensity: number;
 }
 
 export interface Theme {
@@ -42,7 +40,17 @@ export interface Theme {
   accentColor: AccentColor;
   customAccentColor?: string;
   isDark: boolean;
-  isBlurred: boolean;
+  isAdaptive: boolean;
+  adaptivePalette: AdaptivePalette | null;
+}
+
+export interface AdaptivePalette {
+  dominant: string;
+  vibrant: string;
+  muted: string;
+  darkVibrant: string;
+  darkMuted: string;
+  lightVibrant: string;
 }
 
 interface ThemeContextValue {
@@ -50,6 +58,7 @@ interface ThemeContextValue {
   setThemeMode: (mode: ThemeMode) => void;
   setAccentColor: (color: AccentColor, customColor?: string) => void;
   toggleTheme: () => void;
+  setAdaptivePalette: (palette: AdaptivePalette | null) => void;
 }
 
 const ACCENT_COLORS: Record<AccentColor, string> = {
@@ -73,12 +82,24 @@ function adjustColor(color: string, amount: number): string {
   const num = parseInt(hex, 16);
   if (isNaN(num)) return color;
   let r = (num >> 16) + amount;
-  let g = ((num >> 8) & 0x00FF) + amount;
-  let b = (num & 0x0000FF) + amount;
+  let g = ((num >> 8) & 0x00ff) + amount;
+  let b = (num & 0x0000ff) + amount;
   r = Math.max(0, Math.min(255, r));
   g = Math.max(0, Math.min(255, g));
   b = Math.max(0, Math.min(255, b));
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function luminance(hex: string): number {
+  const { r, g, b } = hexToRgb(hex);
+  return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
 function makeDarkColors(primary: string): ThemeColors {
@@ -109,8 +130,6 @@ function makeDarkColors(primary: string): ThemeColors {
     playerBackground: '#0D0D0D',
     gradientStart: primary,
     gradientEnd: '#121212',
-    blurTint: 'dark',
-    blurIntensity: 80,
   };
 }
 
@@ -142,41 +161,47 @@ function makeLightColors(primary: string): ThemeColors {
     playerBackground: '#F5F5F5',
     gradientStart: primary,
     gradientEnd: '#FFFFFF',
-    blurTint: 'light',
-    blurIntensity: 80,
   };
 }
 
-function makeCrystalColors(primary: string): ThemeColors {
+function makeAdaptiveColors(palette: AdaptivePalette | null, fallbackPrimary: string): ThemeColors {
+  const dom = palette?.dominant || fallbackPrimary;
+  const vib = palette?.vibrant || dom;
+  const darkMuted = palette?.darkMuted || '#1a1a2e';
+  const lightVib = palette?.lightVibrant || adjustColor(dom, 60);
+
+  const bgLum = luminance(darkMuted);
+  const textColor = bgLum > 128 ? '#111111' : '#FFFFFF';
+  const textSecondary = bgLum > 128 ? '#444444' : '#CCCCCC';
+  const textMuted = bgLum > 128 ? '#777777' : '#888888';
+
   return {
-    background: 'rgba(15, 15, 20, 0.65)',
-    backgroundElevated: 'rgba(255, 255, 255, 0.08)',
-    backgroundHighlight: 'rgba(255, 255, 255, 0.12)',
-    backgroundPressed: 'rgba(255, 255, 255, 0.18)',
-    textPrimary: '#FFFFFF',
-    textSecondary: 'rgba(255, 255, 255, 0.70)',
-    textMuted: 'rgba(255, 255, 255, 0.40)',
-    textDisabled: 'rgba(255, 255, 255, 0.20)',
-    primary: primary || '#007AFF',
-    primaryDark: adjustColor(primary || '#007AFF', -25),
-    primaryLight: adjustColor(primary || '#007AFF', 25),
-    border: 'rgba(255, 255, 255, 0.10)',
-    divider: 'rgba(255, 255, 255, 0.08)',
-    error: '#FF453A',
-    success: '#30D158',
-    warning: '#FFD60A',
-    info: '#64D2FF',
-    surface: 'rgba(255, 255, 255, 0.06)',
-    surfaceLight: 'rgba(255, 255, 255, 0.10)',
-    surfaceBorder: 'rgba(255, 255, 255, 0.12)',
-    progressBar: 'rgba(255, 255, 255, 0.10)',
-    progressBarFill: primary || '#007AFF',
+    background: adjustColor(darkMuted, -30),
+    backgroundElevated: adjustColor(darkMuted, -10),
+    backgroundHighlight: adjustColor(darkMuted, 20),
+    backgroundPressed: adjustColor(darkMuted, 35),
+    textPrimary: textColor,
+    textSecondary,
+    textMuted,
+    textDisabled: adjustColor(textMuted, -40),
+    primary: vib,
+    primaryDark: adjustColor(vib, -25),
+    primaryLight: lightVib,
+    border: adjustColor(darkMuted, 25),
+    divider: adjustColor(darkMuted, 15),
+    error: '#FF4444',
+    success: vib,
+    warning: '#FFAA00',
+    info: '#4688F1',
+    surface: adjustColor(darkMuted, 5),
+    surfaceLight: adjustColor(darkMuted, 15),
+    surfaceBorder: adjustColor(darkMuted, 25),
+    progressBar: adjustColor(darkMuted, 35),
+    progressBarFill: vib,
     sliderThumb: '#FFFFFF',
-    playerBackground: 'rgba(10, 10, 15, 0.75)',
-    gradientStart: primary || '#007AFF',
-    gradientEnd: 'rgba(15, 15, 20, 0.65)',
-    blurTint: 'dark',
-    blurIntensity: 120,
+    playerBackground: adjustColor(darkMuted, -40),
+    gradientStart: dom,
+    gradientEnd: adjustColor(darkMuted, -30),
   };
 }
 
@@ -193,8 +218,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [accentColor, setAccentColorState] = useState<AccentColor>('green');
   const [customAccentColor, setCustomAccentColor] = useState<string | undefined>();
   const [loaded, setLoaded] = useState(false);
+  const [adaptivePalette, setAdaptivePaletteState] = useState<AdaptivePalette | null>(null);
   const [systemScheme, setSystemScheme] = useState<'light' | 'dark'>(
-    Appearance.getColorScheme() === 'light' ? 'light' : 'dark'
+    Appearance.getColorScheme() === 'light' ? 'light' : 'dark',
   );
 
   useEffect(() => {
@@ -205,7 +231,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           STORAGE_KEYS.ACCENT_COLOR,
           STORAGE_KEYS.CUSTOM_ACCENT,
         ]);
-        if (savedMode[1]) setThemeModeState(savedMode[1] as ThemeMode);
+        if (savedMode[1]) {
+          const validModes: ThemeMode[] = ['light', 'dark', 'adaptive', 'auto'];
+          const mode = savedMode[1] as string;
+          setThemeModeState(validModes.includes(mode as ThemeMode) ? (mode as ThemeMode) : 'dark');
+        }
         if (savedAccent[1]) setAccentColorState(savedAccent[1] as AccentColor);
         if (savedCustom[1]) setCustomAccentColor(savedCustom[1]);
       } catch (_e) {}
@@ -244,10 +274,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleTheme = useCallback(() => {
-    const modes: ThemeMode[] = ['dark', 'light', 'crystal', 'auto'];
+    const modes: ThemeMode[] = ['dark', 'light', 'adaptive', 'auto'];
     const idx = modes.indexOf(themeMode);
     setThemeMode(modes[(idx + 1) % modes.length]);
   }, [themeMode, setThemeMode]);
+
+  const setAdaptivePalette = useCallback((palette: AdaptivePalette | null) => {
+    setAdaptivePaletteState(palette);
+  }, []);
 
   const theme = useMemo((): Theme => {
     let effectiveMode: ThemeMode = themeMode;
@@ -255,17 +289,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       effectiveMode = systemScheme;
     }
 
-    const primaryColor = accentColor === 'custom' && customAccentColor
-      ? customAccentColor
-      : ACCENT_COLORS[accentColor] || ACCENT_COLORS.green;
+    const primaryColor =
+      accentColor === 'custom' && customAccentColor
+        ? customAccentColor
+        : ACCENT_COLORS[accentColor] || ACCENT_COLORS.green;
 
     let colors: ThemeColors;
     switch (effectiveMode) {
       case 'light':
         colors = makeLightColors(primaryColor);
         break;
-      case 'crystal':
-        colors = makeCrystalColors(primaryColor);
+      case 'adaptive':
+        colors = makeAdaptiveColors(adaptivePalette, primaryColor);
         break;
       default:
         colors = makeDarkColors(primaryColor);
@@ -277,17 +312,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       colors,
       accentColor,
       customAccentColor,
-      isDark: effectiveMode === 'dark',
-      isBlurred: effectiveMode === 'crystal',
+      isDark: effectiveMode === 'dark' || effectiveMode === 'adaptive',
+      isAdaptive: effectiveMode === 'adaptive',
+      adaptivePalette,
     };
-  }, [themeMode, accentColor, customAccentColor, systemScheme]);
+  }, [themeMode, accentColor, customAccentColor, systemScheme, adaptivePalette]);
 
-  const ctx = useMemo<ThemeContextValue>(() => ({
-    theme,
-    setThemeMode,
-    setAccentColor,
-    toggleTheme,
-  }), [theme, setThemeMode, setAccentColor, toggleTheme]);
+  const ctx = useMemo<ThemeContextValue>(
+    () => ({
+      theme,
+      setThemeMode,
+      setAccentColor,
+      toggleTheme,
+      setAdaptivePalette,
+    }),
+    [theme, setThemeMode, setAccentColor, toggleTheme, setAdaptivePalette],
+  );
 
   if (!loaded) {
     return (
@@ -297,11 +337,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     );
   }
 
-  return (
-    <ThemeContext.Provider value={ctx}>
-      {children}
-    </ThemeContext.Provider>
-  );
+  return <ThemeContext.Provider value={ctx}>{children}</ThemeContext.Provider>;
 }
 
 const loadingStyles = StyleSheet.create({

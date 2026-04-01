@@ -3,23 +3,11 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { usePlayer } from '@/contexts/PlayerContext';
 import { calculateProgress } from '@/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import React, { memo, useCallback, useRef } from 'react';
-import {
-    PanResponder,
-    Platform,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
-} from 'react-native';
-import Animated, {
-    useAnimatedStyle,
-    useSharedValue,
-    withSpring,
-} from 'react-native-reanimated';
+import { PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { OptimizedArtwork } from './OptimizedArtwork';
 
 function MiniPlayerComponent() {
@@ -33,45 +21,66 @@ function MiniPlayerComponent() {
   const progress = calculateProgress(position, duration);
 
   const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
   const swipeHandled = useRef(false);
 
-  const SWIPE_THRESHOLD = 60;
+  const SWIPE_H_THRESHOLD = 60;
+  const SWIPE_V_THRESHOLD = 40;
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 10 && Math.abs(gs.dx) > Math.abs(gs.dy),
+      onMoveShouldSetPanResponder: (_, gs) =>
+        (Math.abs(gs.dx) > 10 && Math.abs(gs.dx) > Math.abs(gs.dy)) ||
+        (gs.dy < -10 && Math.abs(gs.dy) > Math.abs(gs.dx)),
       onPanResponderGrant: () => {
         swipeHandled.current = false;
       },
       onPanResponderMove: (_, gs) => {
-        translateX.value = gs.dx;
-        if (!swipeHandled.current && Math.abs(gs.dx) > SWIPE_THRESHOLD) {
-          swipeHandled.current = true;
-          if (gs.dx < -SWIPE_THRESHOLD) {
+        if (Math.abs(gs.dx) > Math.abs(gs.dy)) {
+          translateX.value = gs.dx;
+        } else if (gs.dy < 0) {
+          translateY.value = gs.dy;
+        }
+
+        if (!swipeHandled.current) {
+          if (gs.dy < -SWIPE_V_THRESHOLD && Math.abs(gs.dy) > Math.abs(gs.dx)) {
+            swipeHandled.current = true;
+            router.push('/modal');
+          } else if (gs.dx < -SWIPE_H_THRESHOLD) {
+            swipeHandled.current = true;
             controls.next();
-          } else if (gs.dx > SWIPE_THRESHOLD) {
+          } else if (gs.dx > SWIPE_H_THRESHOLD) {
+            swipeHandled.current = true;
             controls.previous();
           }
         }
       },
       onPanResponderRelease: () => {
         translateX.value = withSpring(0, { damping: 15, stiffness: 200 });
+        translateY.value = withSpring(0, { damping: 15, stiffness: 200 });
       },
       onPanResponderTerminate: () => {
         translateX.value = withSpring(0, { damping: 15, stiffness: 200 });
+        translateY.value = withSpring(0, { damping: 15, stiffness: 200 });
       },
-    })
+    }),
   ).current;
 
   const swipeAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value * 0.3 }],
+    transform: [{ translateX: translateX.value * 0.3 }, { translateY: Math.min(0, translateY.value * 0.3) }],
     opacity: 1 - Math.abs(translateX.value) / 300,
   }));
 
-  const handlePress = useCallback(() => { router.push('/modal'); }, []);
-  const handlePlayPause = useCallback(() => { controls.togglePlayPause(); }, [controls]);
-  const handleNext = useCallback(() => { controls.next(); }, [controls]);
+  const handlePress = useCallback(() => {
+    router.push('/modal');
+  }, []);
+  const handlePlayPause = useCallback(() => {
+    controls.togglePlayPause();
+  }, [controls]);
+  const handleNext = useCallback(() => {
+    controls.next();
+  }, [controls]);
 
   const innerContent = (
     <>
@@ -97,10 +106,18 @@ function MiniPlayerComponent() {
           </Text>
         </View>
         <View style={styles.controls}>
-          <TouchableOpacity style={styles.controlButton} onPress={handlePlayPause} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity
+            style={styles.controlButton}
+            onPress={handlePlayPause}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
             <Ionicons name={isPlaying ? 'pause' : 'play'} size={28} color={c.textPrimary} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.controlButton} onPress={handleNext} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity
+            style={styles.controlButton}
+            onPress={handleNext}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
             <Ionicons name="play-forward" size={24} color={c.textPrimary} />
           </TouchableOpacity>
         </View>
@@ -110,35 +127,7 @@ function MiniPlayerComponent() {
 
   return (
     <Animated.View style={[styles.container, { ...Shadows.lg }, swipeAnimatedStyle]} {...panResponder.panHandlers}>
-    <TouchableOpacity
-      style={styles.touchable}
-      onPress={handlePress}
-      activeOpacity={0.95}
-    >
-      {theme.isBlurred ? (
-        (() => {
-          const supportsNativeBlur = Platform.OS === 'ios' || (Platform.OS === 'android' && Platform.Version >= 31);
-          if (supportsNativeBlur) {
-            return (
-              <BlurView intensity={c.blurIntensity} tint={c.blurTint} style={styles.background}>
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.05)' }]} />
-                {innerContent}
-              </BlurView>
-            );
-          }
-          return (
-            <LinearGradient
-              colors={['rgba(25, 25, 40, 0.95)', 'rgba(15, 15, 28, 0.97)']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.background}
-            >
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.04)' }]} />
-              {innerContent}
-            </LinearGradient>
-          );
-        })()
-      ) : (
+      <TouchableOpacity style={styles.touchable} onPress={handlePress} activeOpacity={0.95}>
         <LinearGradient
           colors={[c.backgroundHighlight, c.backgroundElevated]}
           start={{ x: 0, y: 0 }}
@@ -147,8 +136,7 @@ function MiniPlayerComponent() {
         >
           {innerContent}
         </LinearGradient>
-      )}
-    </TouchableOpacity>
+      </TouchableOpacity>
     </Animated.View>
   );
 }
@@ -179,7 +167,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginRight: Spacing.md,
   },
-  artwork: { width: '100%', height: '100%' },
   trackInfo: { flex: 1, justifyContent: 'center' },
   title: {
     fontSize: Typography.fontSize.base,
